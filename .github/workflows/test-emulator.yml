@@ -1,0 +1,121 @@
+name: Emulator Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke-test:
+    name: Install & Launch (API ${{ matrix.api-level }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [31]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-x86_64-google_apis
+
+      - name: Create AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: echo "AVD snapshot created for caching"
+
+      - name: Run smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          script: |
+            echo "=== Installing APK ==="
+            adb install app/build/outputs/apk/debug/app-debug.apk
+
+            echo "=== Launching app ==="
+            adb shell am start -W -n com.example.ipainstaller/.ui.main.MainActivity
+
+            sleep 5
+
+            echo "=== Checking app is running ==="
+            PID=$(adb shell pidof com.example.ipainstaller)
+            if [ -z "$PID" ]; then
+              echo "FAIL: App not running — likely crashed on launch"
+              adb logcat -d | tail -100
+              exit 1
+            fi
+            echo "OK: App running with PID $PID"
+
+            echo "=== Taking screenshot ==="
+            adb shell screencap -p /sdcard/screenshot.png
+            adb pull /sdcard/screenshot.png ./launch-screenshot.png
+
+            echo "=== Checking for crashes ==="
+            CRASHES=$(adb logcat -d -s AndroidRuntime:E | grep -c "FATAL EXCEPTION" || true)
+            if [ "$CRASHES" -gt 0 ]; then
+              echo "FAIL: Found $CRASHES fatal exception(s)"
+              adb logcat -d -s AndroidRuntime:E
+              exit 1
+            fi
+            echo "OK: No crashes"
+
+            echo "=== Verifying package installed ==="
+            adb shell pm list packages | grep com.example.ipainstaller
+            echo "Smoke test passed!"
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-api${{ matrix.api-level }}
+          path: launch-screenshot.png
+
+      - name: Save logcat on failure
+        if: failure()
+        run: adb logcat -d > logcat.txt 2>/dev/null || true
+
+      - name: Upload logcat on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat-api${{ matrix.api-level }}
+          path: logcat.txt
