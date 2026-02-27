@@ -70,34 +70,17 @@ jobs:
           script: |
             echo "=== Installing APK ==="
             adb install app/build/outputs/apk/debug/app-debug.apk
-
             echo "=== Launching app ==="
             adb shell am start -W -n com.example.ipainstaller/.ui.main.MainActivity
-
             sleep 5
-
             echo "=== Checking app is running ==="
-            PID=$(adb shell pidof com.example.ipainstaller)
-            if [ -z "$PID" ]; then
-              echo "FAIL: App not running — likely crashed on launch"
-              adb logcat -d | tail -100
-              exit 1
-            fi
-            echo "OK: App running with PID $PID"
-
+            adb shell pidof com.example.ipainstaller || (echo "FAIL: App crashed on launch" && adb logcat -d | tail -100 && exit 1)
+            echo "OK: App is running"
             echo "=== Taking screenshot ==="
             adb shell screencap -p /sdcard/screenshot.png
             adb pull /sdcard/screenshot.png ./launch-screenshot.png
-
             echo "=== Checking for crashes ==="
-            CRASHES=$(adb logcat -d -s AndroidRuntime:E | grep -c "FATAL EXCEPTION" || true)
-            if [ "$CRASHES" -gt 0 ]; then
-              echo "FAIL: Found $CRASHES fatal exception(s)"
-              adb logcat -d -s AndroidRuntime:E
-              exit 1
-            fi
-            echo "OK: No crashes"
-
+            adb logcat -d -s AndroidRuntime:E | grep -c "FATAL EXCEPTION" && (echo "FAIL: Fatal exception found" && adb logcat -d -s AndroidRuntime:E && exit 1) || echo "OK: No crashes"
             echo "=== Verifying package installed ==="
             adb shell pm list packages | grep com.example.ipainstaller
             echo "Smoke test passed!"
