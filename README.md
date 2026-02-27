@@ -92,4 +92,4 @@ Get the latest APK from [Releases](https://github.com/andreevym/app-android-ipa-
 
 ## License
 
-GPL-3.0
+GPL-3.0 — see [LICENSE](LICENSE) for details.
