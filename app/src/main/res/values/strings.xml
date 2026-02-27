@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IPA Installer</string>
+    <string name="no_device">No iOS device connected</string>
+    <string name="device_connected">Connected: %s</string>
+    <string name="select_ipa">Select IPA File</string>
+    <string name="install">Install</string>
+    <string name="installing">Installing…</string>
+    <string name="install_success">Installation complete</string>
+    <string name="install_failed">Installation failed: %s</string>
+    <string name="usb_permission_denied">USB permission denied</string>
+    <string name="pairing_required">Please tap \"Trust\" on your iOS device</string>
+    <string name="uploading_ipa">Uploading IPA to device…</string>
+</resources>
