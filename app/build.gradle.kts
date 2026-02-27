@@ -79,7 +79,6 @@ dependencies {
     // Crypto (Apple pairing TLS)
     implementation(libs.bouncycastle.bcpkix)
     implementation(libs.bouncycastle.bcprov)
-    implementation(libs.bouncycastle.bctls)
 
     // Material (XML theme)
     implementation(libs.google.material)

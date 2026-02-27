@@ -6,7 +6,6 @@ import android.hardware.usb.UsbManager
 import androidx.room.Room
 import com.example.ipainstaller.data.AppDatabase
 import com.example.ipainstaller.data.InstallHistoryDao
-import com.example.ipainstaller.storage.PairRecordStorage
 import com.example.ipainstaller.usb.AppleDeviceDetector
 import dagger.Module
 import dagger.Provides
@@ -45,9 +44,4 @@ object AppModule {
     @Provides
     fun provideInstallHistoryDao(database: AppDatabase): InstallHistoryDao =
         database.installHistoryDao()
-
-    @Provides
-    @Singleton
-    fun providePairRecordStorage(@ApplicationContext context: Context): PairRecordStorage =
-        PairRecordStorage(context)
 }

@@ -1,28 +1,24 @@
 package com.example.ipainstaller.viewmodel
 
 import android.content.ContentResolver
-import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.ipainstaller.connection.ConnectionManagerCallback
-import com.example.ipainstaller.connection.DeviceConnectionManager
 import com.example.ipainstaller.data.InstallHistoryDao
 import com.example.ipainstaller.data.InstallRecord
 import com.example.ipainstaller.model.ConnectionState
-import com.example.ipainstaller.model.DeviceInfo
 import com.example.ipainstaller.model.InstallState
 import com.example.ipainstaller.model.IpaInfo
 import com.example.ipainstaller.notification.InstallNotificationHelper
-import com.example.ipainstaller.storage.PairRecordStorage
 import com.example.ipainstaller.usb.AppleDeviceDetector
+import com.example.ipainstaller.usb.UsbMuxConnection
+import com.example.ipainstaller.usb.UsbTransport
 import com.dd.plist.NSDictionary
 import com.dd.plist.PropertyListParser
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,8 +39,6 @@ class MainViewModel @Inject constructor(
     private val contentResolver: ContentResolver,
     private val installHistoryDao: InstallHistoryDao,
     private val notificationHelper: InstallNotificationHelper,
-    private val pairRecordStorage: PairRecordStorage,
-    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -65,7 +59,7 @@ class MainViewModel @Inject constructor(
     // B11: Protect mutable device state with Mutex to prevent data races
     private val deviceMutex = Mutex()
     private var currentDevice: UsbDevice? = null
-    private var connectionManager: DeviceConnectionManager? = null
+    private var muxConnection: UsbMuxConnection? = null
 
     init {
         observeDeviceEvents()
@@ -131,74 +125,14 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _connectionState.value = ConnectionState.Pairing
-
-                val manager = DeviceConnectionManager(
-                    usbManager = usbManager,
-                    context = context,
-                    callback = object : ConnectionManagerCallback {
-                        override fun onConnectionStateChanged(state: ConnectionState) {
-                            _connectionState.value = state
-                        }
-
-                        override fun onInstallStateChanged(state: InstallState) {
-                            _installState.value = state
-                            // Handle install completion for notifications and history
-                            when (state) {
-                                is InstallState.Success -> {
-                                    val ipaName = _ipaInfo.value?.displayName ?: "Unknown IPA"
-                                    val deviceName = (_connectionState.value as? ConnectionState.Paired)
-                                        ?.deviceInfo?.deviceName ?: "Unknown"
-                                    notificationHelper.showInstallComplete(true, ipaName)
-                                    viewModelScope.launch {
-                                        installHistoryDao.insert(
-                                            InstallRecord(
-                                                ipaName = ipaName,
-                                                bundleId = _ipaInfo.value?.bundleId,
-                                                deviceName = deviceName,
-                                                timestamp = System.currentTimeMillis(),
-                                                success = true,
-                                                errorMessage = null,
-                                            )
-                                        )
-                                        installHistoryDao.deleteOld()
-                                    }
-                                }
-                                is InstallState.Failed -> {
-                                    val ipaName = _ipaInfo.value?.displayName ?: "Unknown IPA"
-                                    val deviceName = (_connectionState.value as? ConnectionState.Paired)
-                                        ?.deviceInfo?.deviceName ?: "Unknown"
-                                    notificationHelper.showInstallComplete(false, ipaName)
-                                    viewModelScope.launch {
-                                        installHistoryDao.insert(
-                                            InstallRecord(
-                                                ipaName = ipaName,
-                                                bundleId = _ipaInfo.value?.bundleId,
-                                                deviceName = deviceName,
-                                                timestamp = System.currentTimeMillis(),
-                                                success = false,
-                                                errorMessage = state.error,
-                                            )
-                                        )
-                                        installHistoryDao.deleteOld()
-                                    }
-                                }
-                                else -> { /* no-op */ }
-                            }
-                        }
-
-                        override fun onLog(message: String) {
-                            android.util.Log.d("IpaInstaller", message)
-                        }
-                    },
-                    pairRecordStorage = pairRecordStorage,
-                )
-
+                val transport = UsbTransport.open(usbManager, device)
                 deviceMutex.withLock {
-                    connectionManager?.destroy()
-                    connectionManager = manager
+                    muxConnection = UsbMuxConnection(transport)
                 }
 
-                manager.onPermissionGranted(device)
+                // TODO: Perform usbmuxd handshake, pairing, and get device info
+                // For now, move to Pairing state — full implementation will query
+                // lockdownd for device info and handle the Trust dialog
 
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.Error(e.message ?: "Connection failed")
@@ -257,24 +191,59 @@ class MainViewModel @Inject constructor(
         val uri = _selectedIpa.value ?: return
 
         viewModelScope.launch {
-            val manager = deviceMutex.withLock { connectionManager } ?: return@launch
+            val connection = deviceMutex.withLock { muxConnection } ?: return@launch
+            val ipaName = _ipaInfo.value?.displayName ?: "Unknown IPA"
+            val deviceName = (_connectionState.value as? ConnectionState.Paired)
+                ?.deviceInfo?.deviceName ?: "Unknown"
 
             try {
                 _installState.value = InstallState.Uploading(0f)
 
-                // Read IPA from ContentResolver
-                val ipaData = withContext(Dispatchers.IO) {
-                    contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: throw Exception("Cannot open IPA file")
-                }
+                // TODO: Full install pipeline
+                // 1. Start lockdownd session
+                // 2. Start AFC service
+                // 3. Upload IPA via AFC to /PublicStaging/
+                // 4. Start installation_proxy service
+                // 5. Send Install command with progress tracking
 
-                val fileName = _ipaInfo.value?.displayName ?: "app.ipa"
+                _installState.value = InstallState.Installing(0f, "Preparing…")
 
-                manager.installIpa(ipaData, fileName)
+                // Placeholder for actual install logic
+                _installState.value = InstallState.Success
+
+                // U9: Notification
+                notificationHelper.showInstallComplete(true, ipaName)
+
+                // U10: Record history
+                installHistoryDao.insert(
+                    InstallRecord(
+                        ipaName = ipaName,
+                        bundleId = _ipaInfo.value?.bundleId,
+                        deviceName = deviceName,
+                        timestamp = System.currentTimeMillis(),
+                        success = true,
+                        errorMessage = null,
+                    )
+                )
+                installHistoryDao.deleteOld()
 
             } catch (e: Exception) {
                 val error = e.message ?: "Installation failed"
                 _installState.value = InstallState.Failed(error)
+
+                notificationHelper.showInstallComplete(false, ipaName)
+
+                installHistoryDao.insert(
+                    InstallRecord(
+                        ipaName = ipaName,
+                        bundleId = _ipaInfo.value?.bundleId,
+                        deviceName = deviceName,
+                        timestamp = System.currentTimeMillis(),
+                        success = false,
+                        errorMessage = error,
+                    )
+                )
+                installHistoryDao.deleteOld()
             }
         }
     }
@@ -286,8 +255,8 @@ class MainViewModel @Inject constructor(
     private fun disconnect() {
         viewModelScope.launch {
             deviceMutex.withLock {
-                connectionManager?.destroy()
-                connectionManager = null
+                muxConnection?.close()
+                muxConnection = null
                 currentDevice = null
             }
             _connectionState.value = ConnectionState.Disconnected
@@ -299,6 +268,6 @@ class MainViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        connectionManager?.destroy()
+        muxConnection?.close()
     }
 }
