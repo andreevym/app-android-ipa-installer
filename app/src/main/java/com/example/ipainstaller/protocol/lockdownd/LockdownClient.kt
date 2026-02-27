@@ -27,7 +27,7 @@ class LockdownClient(
         private const val LABEL = "ipainstaller"
     }
 
-    /** Sends a lockdownd request and reads the response. */
+    /** Sends a lockdownd request and reads the response. Throws on lockdownd errors. */
     private suspend fun request(dict: NSDictionary): NSDictionary {
         // Add label
         dict["Label"] = NSString(LABEL)
@@ -47,8 +47,14 @@ class LockdownClient(
         }
         val responsePayload = readFn(responseLength)
         val plist = PropertyListParser.parse(responsePayload)
-        return plist as? NSDictionary
+        val response = plist as? NSDictionary
             ?: throw IOException("Expected dictionary from lockdownd")
+
+        // B15: Check for errors in all lockdownd responses
+        val error = (response["Error"] as? NSString)?.content
+        if (error != null) throw IOException("lockdownd error: $error")
+
+        return response
     }
 
     /** Queries a single lockdownd value. */
@@ -126,9 +132,6 @@ class LockdownClient(
         dict["Request"] = NSString("StartService")
         dict["Service"] = NSString(serviceName)
         val response = request(dict)
-
-        val error = (response["Error"] as? NSString)?.content
-        if (error != null) throw IOException("lockdownd StartService error: $error")
 
         val port = (response["Port"] as? com.dd.plist.NSNumber)?.intValue()
             ?: throw IOException("No port in StartService response")

@@ -48,6 +48,7 @@ class InstallationProxyClient(
      */
     suspend fun install(
         packagePath: String,
+        packageType: String = "Developer",
         onProgress: (suspend (String, Int) -> Unit)? = null,
     ) {
         val dict = NSDictionary()
@@ -55,7 +56,7 @@ class InstallationProxyClient(
         dict["PackagePath"] = NSString(packagePath)
 
         val options = NSDictionary()
-        options["PackageType"] = NSString("Developer")
+        options["PackageType"] = NSString(packageType)
         dict["ClientOptions"] = options
 
         sendCommand(dict)

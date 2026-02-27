@@ -66,6 +66,7 @@ object MuxProtocol {
                 dict["ProgName"] = NSString("ipainstaller")
             }
             is MuxMessage.Connect -> {
+                require(message.port in 0..65535) { "Invalid port: ${message.port}" }
                 dict["MessageType"] = NSString("Connect")
                 dict["DeviceID"] = NSNumber(message.deviceId)
                 // usbmuxd expects port in network byte order (big-endian) as a 16-bit value
