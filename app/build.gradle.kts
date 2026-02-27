@@ -79,12 +79,22 @@ dependencies {
     // Crypto (Apple pairing TLS)
     implementation(libs.bouncycastle.bcpkix)
     implementation(libs.bouncycastle.bcprov)
+    implementation(libs.bouncycastle.bctls)
+
+    // Material (XML theme)
+    implementation(libs.google.material)
+
+    // Room (install history)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // Plist parsing
     implementation(libs.dd.plist)
 
     // Testing
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso)
 }

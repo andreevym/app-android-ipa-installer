@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IPA Установщик</string>
+    <string name="no_device">iOS-устройство не подключено</string>
+    <string name="device_connected">Подключено: %s</string>
+    <string name="select_ipa">Выбрать IPA-файл</string>
+    <string name="install">Установить</string>
+    <string name="installing">Установка…</string>
+    <string name="install_success">Установка завершена</string>
+    <string name="install_failed">Ошибка установки: %s</string>
+    <string name="usb_permission_denied">Доступ к USB отклонён</string>
+    <string name="pairing_required">Нажмите «Доверять» на iOS-устройстве</string>
+    <string name="uploading_ipa">Загрузка IPA на устройство…</string>
+    <string name="usb_connected_requesting_permission">USB подключён, запрос разрешения…</string>
+    <string name="ios_version">iOS %s</string>
+    <string name="ok">OK</string>
+    <string name="dismiss">Закрыть</string>
+
+    <!-- U1: MIME filter -->
+    <string name="invalid_file_type">Выберите файл с расширением .ipa</string>
+
+    <!-- U4: Reconnect -->
+    <string name="reconnect">Переподключить</string>
+
+    <!-- U5: IPA info -->
+    <string name="ipa_size">Размер: %s</string>
+    <string name="ipa_bundle_id">Bundle ID: %s</string>
+    <string name="ipa_version">Версия: %s</string>
+
+    <!-- U9: Notifications -->
+    <string name="notification_channel_name">Статус установки</string>
+    <string name="notification_install_success">Установка выполнена</string>
+    <string name="notification_install_failed">Установка не удалась</string>
+
+    <!-- U10: History -->
+    <string name="install_history">История установок</string>
+    <string name="no_history">История установок пуста</string>
+    <string name="history_success">Успешно</string>
+    <string name="history_failed">Ошибка</string>
+</resources>
