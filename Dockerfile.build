@@ -1,0 +1,22 @@
+FROM gradle:8.11.1-jdk17 AS builder
+
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+ENV ANDROID_HOME=/opt/android-sdk
+
+# Install Android SDK
+RUN apt-get update && apt-get install -y --no-install-recommends wget unzip && \
+    mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip && \
+    unzip -q /tmp/cmdtools.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+    rm /tmp/cmdtools.zip && \
+    yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 && \
+    ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+        "platforms;android-35" \
+        "build-tools;35.0.0" \
+        "platform-tools" && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+RUN gradle assembleDebug --no-daemon
