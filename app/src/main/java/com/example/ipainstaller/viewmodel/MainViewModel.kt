@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 @HiltViewModel
@@ -32,6 +34,8 @@ class MainViewModel @Inject constructor(
     private val _selectedIpa = MutableStateFlow<Uri?>(null)
     val selectedIpa: StateFlow<Uri?> = _selectedIpa.asStateFlow()
 
+    // B11: Protect mutable device state with Mutex to prevent data races
+    private val deviceMutex = Mutex()
     private var currentDevice: UsbDevice? = null
     private var muxConnection: UsbMuxConnection? = null
 
@@ -44,7 +48,7 @@ class MainViewModel @Inject constructor(
             deviceDetector.deviceEvents().collect { event ->
                 when (event) {
                     is AppleDeviceDetector.DeviceEvent.Attached -> {
-                        currentDevice = event.device
+                        deviceMutex.withLock { currentDevice = event.device }
                         _connectionState.value = ConnectionState.UsbConnected
                         deviceDetector.requestPermission(
                             event.device,
@@ -71,7 +75,18 @@ class MainViewModel @Inject constructor(
         val devices = deviceDetector.findConnectedDevices()
         if (devices.isNotEmpty()) {
             val device = devices.first()
-            currentDevice = device
+            viewModelScope.launch {
+                deviceMutex.withLock { currentDevice = device }
+            }
+            _connectionState.value = ConnectionState.UsbConnected
+            deviceDetector.requestPermission(device, deviceDetector.createPermissionIntent())
+        }
+    }
+
+    /** B10: Called when a USB device is attached via intent. */
+    fun onUsbDeviceAttached(device: UsbDevice) {
+        viewModelScope.launch {
+            deviceMutex.withLock { currentDevice = device }
             _connectionState.value = ConnectionState.UsbConnected
             deviceDetector.requestPermission(device, deviceDetector.createPermissionIntent())
         }
@@ -82,7 +97,9 @@ class MainViewModel @Inject constructor(
             try {
                 _connectionState.value = ConnectionState.Pairing
                 val transport = UsbTransport.open(usbManager, device)
-                muxConnection = UsbMuxConnection(transport)
+                deviceMutex.withLock {
+                    muxConnection = UsbMuxConnection(transport)
+                }
 
                 // TODO: Perform usbmuxd handshake, pairing, and get device info
                 // For now, move to Pairing state — full implementation will query
@@ -100,9 +117,10 @@ class MainViewModel @Inject constructor(
 
     fun installIpa() {
         val uri = _selectedIpa.value ?: return
-        val connection = muxConnection ?: return
 
         viewModelScope.launch {
+            val connection = deviceMutex.withLock { muxConnection } ?: return@launch
+
             try {
                 _installState.value = InstallState.Uploading(0f)
 
@@ -129,12 +147,16 @@ class MainViewModel @Inject constructor(
     }
 
     private fun disconnect() {
-        muxConnection?.close()
-        muxConnection = null
-        currentDevice = null
-        _connectionState.value = ConnectionState.Disconnected
-        _installState.value = InstallState.Idle
-        _selectedIpa.value = null
+        viewModelScope.launch {
+            deviceMutex.withLock {
+                muxConnection?.close()
+                muxConnection = null
+                currentDevice = null
+            }
+            _connectionState.value = ConnectionState.Disconnected
+            _installState.value = InstallState.Idle
+            _selectedIpa.value = null
+        }
     }
 
     override fun onCleared() {

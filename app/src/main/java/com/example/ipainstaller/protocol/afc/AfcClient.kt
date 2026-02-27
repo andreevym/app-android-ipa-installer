@@ -1,6 +1,7 @@
 package com.example.ipainstaller.protocol.afc
 
 import java.io.IOException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -73,6 +74,14 @@ class AfcClient(
         buf.getLong() // packet num
         val operation = buf.getLong()
 
+        // B3: Validate length fields to prevent negative sizes or infinite loops
+        if (thisLength < HEADER_SIZE) {
+            throw IOException("AFC thisLength ($thisLength) < HEADER_SIZE ($HEADER_SIZE)")
+        }
+        if (entireLength < thisLength) {
+            throw IOException("AFC entireLength ($entireLength) < thisLength ($thisLength)")
+        }
+
         val headerDataSize = (thisLength - HEADER_SIZE).toInt()
         val headerData = if (headerDataSize > 0) readFn(headerDataSize) else byteArrayOf()
 
@@ -133,11 +142,40 @@ class AfcClient(
     }
 
     /**
-     * Uploads a file to the iOS device in chunks.
+     * B4: Uploads a file to the iOS device using streaming to avoid loading entire file in RAM.
      * @param remotePath Destination path on the device
-     * @param data File contents
+     * @param inputStream Source data stream
+     * @param totalSize Total file size in bytes (for progress reporting)
      * @param chunkSize Bytes per write operation
      * @param onProgress Called with (bytesWritten, totalBytes)
+     */
+    suspend fun uploadFile(
+        remotePath: String,
+        inputStream: InputStream,
+        totalSize: Long,
+        chunkSize: Int = 65536,
+        onProgress: ((Long, Long) -> Unit)? = null,
+    ) {
+        val handle = fileOpen(remotePath)
+        try {
+            val buffer = ByteArray(chunkSize)
+            var totalWritten = 0L
+            while (totalWritten < totalSize) {
+                val bytesRead = inputStream.read(buffer)
+                if (bytesRead == -1) break
+                val chunk = if (bytesRead == buffer.size) buffer else buffer.copyOf(bytesRead)
+                fileWrite(handle, chunk)
+                totalWritten += bytesRead
+                onProgress?.invoke(totalWritten, totalSize)
+            }
+        } finally {
+            fileClose(handle)
+        }
+    }
+
+    /**
+     * Uploads a file to the iOS device from a byte array (kept for backward compatibility).
+     * For large files, prefer the InputStream overload to avoid OOM.
      */
     suspend fun uploadFile(
         remotePath: String,
@@ -145,18 +183,7 @@ class AfcClient(
         chunkSize: Int = 65536,
         onProgress: ((Long, Long) -> Unit)? = null,
     ) {
-        val handle = fileOpen(remotePath)
-        try {
-            var offset = 0
-            while (offset < data.size) {
-                val end = minOf(offset + chunkSize, data.size)
-                fileWrite(handle, data.copyOfRange(offset, end))
-                offset = end
-                onProgress?.invoke(offset.toLong(), data.size.toLong())
-            }
-        } finally {
-            fileClose(handle)
-        }
+        uploadFile(remotePath, data.inputStream(), data.size.toLong(), chunkSize, onProgress)
     }
 
     /** Removes a file or directory. */

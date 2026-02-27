@@ -1,6 +1,7 @@
 package com.example.ipainstaller.ui.main
 
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -28,9 +29,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.ipainstaller.R
@@ -44,6 +47,16 @@ fun MainScreen(viewModel: MainViewModel) {
     val connectionState by viewModel.connectionState.collectAsState()
     val installState by viewModel.installState.collectAsState()
     val selectedIpa by viewModel.selectedIpa.collectAsState()
+
+    // B12: Resolve display name from ContentResolver instead of using lastPathSegment
+    val context = LocalContext.current
+    val ipaDisplayName = remember(selectedIpa) {
+        selectedIpa?.let { uri ->
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        }
+    }
 
     val ipaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -75,7 +88,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 enabled = connectionState is ConnectionState.Paired,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(selectedIpa?.lastPathSegment ?: stringResource(R.string.select_ipa))
+                Text(ipaDisplayName ?: stringResource(R.string.select_ipa))
             }
 
             // Install button

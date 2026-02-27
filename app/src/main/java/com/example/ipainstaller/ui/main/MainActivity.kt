@@ -1,5 +1,8 @@
 package com.example.ipainstaller.ui.main
 
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +21,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // B10: Handle USB_DEVICE_ATTACHED intent when launched by USB connection
+        handleUsbIntent(intent)
+
         setContent {
             IpaInstallerTheme {
                 MainScreen(viewModel)
@@ -28,5 +34,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.scanForDevices()
+    }
+
+    private fun handleUsbIntent(intent: android.content.Intent?) {
+        if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
+        device?.let { viewModel.onUsbDeviceAttached(it) }
     }
 }
