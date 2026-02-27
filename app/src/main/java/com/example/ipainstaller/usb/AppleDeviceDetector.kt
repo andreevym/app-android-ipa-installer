@@ -22,12 +22,26 @@ class AppleDeviceDetector(
 ) {
     companion object {
         const val APPLE_VENDOR_ID = 0x05AC
+        /** Apple USB Multiplexor interface identifiers. */
+        private const val APPLE_MUX_SUBCLASS = 0xFE
+        private const val APPLE_MUX_PROTOCOL = 2
         private const val ACTION_USB_PERMISSION = "com.example.ipainstaller.USB_PERMISSION"
     }
 
-    /** Returns currently connected Apple devices. */
+    /** Returns currently connected Apple iOS devices (filters out keyboards, mice, etc.). */
     fun findConnectedDevices(): List<UsbDevice> =
-        usbManager.deviceList.values.filter { it.vendorId == APPLE_VENDOR_ID }
+        usbManager.deviceList.values.filter { it.vendorId == APPLE_VENDOR_ID && hasMuxInterface(it) }
+
+    /** B9: Checks if the device has the Apple USB Multiplexor interface (subclass 0xFE, protocol 2). */
+    private fun hasMuxInterface(device: UsbDevice): Boolean {
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            if (iface.interfaceSubclass == APPLE_MUX_SUBCLASS && iface.interfaceProtocol == APPLE_MUX_PROTOCOL) {
+                return true
+            }
+        }
+        return false
+    }
 
     /** Requests USB permission for a device. Returns true if permission was already granted. */
     fun requestPermission(device: UsbDevice, intent: PendingIntent): Boolean {
@@ -57,7 +71,7 @@ class AppleDeviceDetector(
                     intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
                 } ?: return
 
-                if (device.vendorId != APPLE_VENDOR_ID) return
+                if (device.vendorId != APPLE_VENDOR_ID || !hasMuxInterface(device)) return
 
                 when (intent.action) {
                     UsbManager.ACTION_USB_DEVICE_ATTACHED -> trySend(DeviceEvent.Attached(device))
