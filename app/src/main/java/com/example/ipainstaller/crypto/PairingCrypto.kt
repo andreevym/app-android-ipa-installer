@@ -5,6 +5,9 @@ import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.asn1.x509.BasicConstraints
+import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
@@ -70,11 +73,19 @@ object PairingCrypto {
 
         val builder: X509v3CertificateBuilder = JcaX509v3CertificateBuilder(
             subject,
-            BigInteger.valueOf(SecureRandom().nextLong()),
+            BigInteger(128, SecureRandom()),
             now,
             notAfter,
             subject,
             keyPair.public,
+        )
+
+        // B6: Root CA must have BasicConstraints and KeyUsage extensions
+        builder.addExtension(
+            Extension.basicConstraints, true, BasicConstraints(true)
+        )
+        builder.addExtension(
+            Extension.keyUsage, true, KeyUsage(KeyUsage.keyCertSign or KeyUsage.cRLSign)
         )
 
         val signer = JcaContentSignerBuilder("SHA256WithRSAEncryption")
@@ -97,7 +108,7 @@ object PairingCrypto {
 
         val builder = JcaX509v3CertificateBuilder(
             issuerCert,
-            BigInteger.valueOf(SecureRandom().nextLong()),
+            BigInteger(128, SecureRandom()),
             now,
             notAfter,
             X500Name("CN=$cn"),

@@ -11,4 +11,8 @@
     <string name="usb_permission_denied">USB permission denied</string>
     <string name="pairing_required">Please tap \"Trust\" on your iOS device</string>
     <string name="uploading_ipa">Uploading IPA to device…</string>
+    <string name="usb_connected_requesting_permission">USB connected, requesting permission…</string>
+    <string name="ios_version">iOS %s</string>
+    <string name="ok">OK</string>
+    <string name="dismiss">Dismiss</string>
 </resources>

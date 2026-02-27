@@ -120,7 +120,7 @@ private fun DeviceStatusCard(state: ConnectionState) {
                 is ConnectionState.UsbConnected -> {
                     CircularProgressIndicator(modifier = Modifier.size(48.dp))
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("USB connected, requesting permission…")
+                    Text(stringResource(R.string.usb_connected_requesting_permission))
                 }
                 is ConnectionState.Pairing -> {
                     Icon(
@@ -145,7 +145,7 @@ private fun DeviceStatusCard(state: ConnectionState) {
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Text(
-                        "iOS ${state.deviceInfo.productVersion}",
+                        stringResource(R.string.ios_version, state.deviceInfo.productVersion),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -201,7 +201,7 @@ private fun InstallProgress(state: InstallState, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(onClick = onDismiss) { Text("OK") }
+                OutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
             }
         }
         is InstallState.Failed -> {
@@ -212,7 +212,7 @@ private fun InstallProgress(state: InstallState, onDismiss: () -> Unit) {
                     textAlign = TextAlign.Center,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(onClick = onDismiss) { Text("Dismiss") }
+                OutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.dismiss)) }
             }
         }
     }
