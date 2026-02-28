@@ -3,7 +3,12 @@ package com.example.ipainstaller.connection
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import com.dd.plist.NSData
+import com.dd.plist.NSDictionary
+import com.dd.plist.NSNumber
+import com.dd.plist.NSString
 import com.example.ipainstaller.crypto.PairingCrypto
+import com.example.ipainstaller.crypto.TlsTransport
 import com.example.ipainstaller.model.ConnectionState
 import com.example.ipainstaller.model.DeviceInfo
 import com.example.ipainstaller.model.InstallState
@@ -12,6 +17,7 @@ import com.example.ipainstaller.protocol.afc.AfcClient
 import com.example.ipainstaller.protocol.installproxy.InstallationProxyClient
 import com.example.ipainstaller.protocol.lockdownd.LockdownClient
 import com.example.ipainstaller.protocol.usbmuxd.MuxMessage
+import com.example.ipainstaller.storage.PairRecordStorage
 import com.example.ipainstaller.usb.AppleDeviceDetector
 import com.example.ipainstaller.usb.UsbMuxConnection
 import com.example.ipainstaller.usb.UsbTransport
@@ -21,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Orchestrates the full pipeline: USB detection → usbmuxd → lockdownd → AFC → install.
@@ -32,6 +39,7 @@ class DeviceConnectionManager(
     private val usbManager: UsbManager,
     private val context: Context,
     private val callback: ConnectionManagerCallback,
+    private val pairRecordStorage: PairRecordStorage,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val detector = AppleDeviceDetector(context, usbManager)
@@ -124,7 +132,7 @@ class DeviceConnectionManager(
 
     /**
      * Phase 1: Discover device via usbmuxd, connect to lockdownd,
-     * query info, pair, start session, get service ports.
+     * query info, pair, start session, upgrade TLS, get service ports.
      */
     private suspend fun phaseDiscoverAndPair(device: UsbDevice) {
         log("Opening USB transport...")
@@ -185,12 +193,30 @@ class DeviceConnectionManager(
             deviceInfo = info
             log("Device: ${info.deviceName} (${info.productType}, iOS ${info.productVersion})")
 
-            // Generate pair record and pair
-            log("Generating pair record...")
-            pairRecord = PairingCrypto.generatePairRecord()
-            log("Sending Pair request (tap 'Trust' on iPhone)...")
-            val pairResult = lockdown.pair(pairRecord!!)
-            log("Pair response: $pairResult")
+            // Check for stored pair record
+            val storedRecord = pairRecordStorage.load(info.udid)
+            if (storedRecord != null) {
+                log("Using stored pair record for ${info.udid}")
+                pairRecord = storedRecord
+            } else {
+                // Get device public key for certificate generation
+                log("Getting device public key...")
+                val pubKeyResp = lockdown.getValue(key = "DevicePublicKey")
+                val pubKeyNSData = pubKeyResp["Value"] as? NSData
+                    ?: throw Exception("No DevicePublicKey in response")
+                val devicePublicKeyDer = pubKeyNSData.bytes()
+
+                log("Generating pair record with device certificate...")
+                pairRecord = PairingCrypto.generatePairRecordWithDeviceKey(devicePublicKeyDer)
+
+                log("Sending Pair request (tap 'Trust' on iPhone)...")
+                val pairResult = lockdown.pair(pairRecord!!)
+                log("Pair response: $pairResult")
+
+                // Save pair record for future connections
+                pairRecordStorage.save(info.udid, pairRecord!!)
+                log("Pair record saved for ${info.udid}")
+            }
 
             // Start session
             log("Starting session...")
@@ -200,23 +226,27 @@ class DeviceConnectionManager(
             )
             log("Session response: $sessionResult")
 
-            // Start services (requires TLS — will likely fail without TLS upgrade)
-            try {
-                log("Starting AFC service...")
-                val afcDescriptor = lockdown.startService(AfcClient.SERVICE_NAME)
-                afcPort = afcDescriptor.port
-                log("AFC service on port $afcPort (ssl=${afcDescriptor.enableSSL})")
-
-                log("Starting installation_proxy service...")
-                val proxyDescriptor = lockdown.startService(InstallationProxyClient.SERVICE_NAME)
-                proxyPort = proxyDescriptor.port
-                log("installation_proxy on port $proxyPort (ssl=${proxyDescriptor.enableSSL})")
-            } catch (e: Exception) {
-                log("StartService failed: ${e.message}")
-                log("NOTE: TLS is not yet implemented. After StartSession, lockdownd requires")
-                log("TLS upgrade before StartService will work. See docs/TODO.md #2.")
-                // Still mark as paired since we got device info
+            // Check if TLS upgrade is needed
+            val enableSSL = (sessionResult["EnableSessionSSL"] as? NSNumber)?.boolValue() ?: false
+            if (enableSSL) {
+                log("Upgrading to TLS...")
+                val tlsTransport = TlsTransport(rawTransport, pairRecord!!)
+                withContext(Dispatchers.IO) {
+                    lockdown.upgradeTls(tlsTransport)
+                }
+                log("TLS handshake complete")
             }
+
+            // Start services (now works over TLS)
+            log("Starting AFC service...")
+            val afcDescriptor = lockdown.startService(AfcClient.SERVICE_NAME)
+            afcPort = afcDescriptor.port
+            log("AFC service on port $afcPort (ssl=${afcDescriptor.enableSSL})")
+
+            log("Starting installation_proxy service...")
+            val proxyDescriptor = lockdown.startService(InstallationProxyClient.SERVICE_NAME)
+            proxyPort = proxyDescriptor.port
+            log("installation_proxy on port $proxyPort (ssl=${proxyDescriptor.enableSSL})")
 
             updateConnection(ConnectionState.Paired(info))
         } finally {
@@ -233,8 +263,8 @@ class DeviceConnectionManager(
             return
         }
         if (afcPort <= 0 || proxyPort <= 0) {
-            log("Service ports not available (TLS not implemented)")
-            updateInstall(InstallState.Failed("Service ports not available — TLS not yet implemented"))
+            log("Service ports not available")
+            updateInstall(InstallState.Failed("Service ports not available"))
             return
         }
 
