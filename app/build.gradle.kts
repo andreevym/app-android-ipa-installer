@@ -17,7 +17,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.example.ipainstaller.HiltTestRunner"
     }
 
     buildTypes {
@@ -79,6 +79,7 @@ dependencies {
     // Crypto (Apple pairing TLS)
     implementation(libs.bouncycastle.bcpkix)
     implementation(libs.bouncycastle.bcprov)
+    implementation(libs.bouncycastle.bctls)
 
     // Material (XML theme)
     implementation(libs.google.material)
@@ -96,4 +97,9 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.hilt.android.testing)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

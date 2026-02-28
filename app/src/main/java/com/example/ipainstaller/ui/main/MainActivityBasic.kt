@@ -23,6 +23,7 @@ import com.example.ipainstaller.connection.ConnectionManagerCallback
 import com.example.ipainstaller.connection.DeviceConnectionManager
 import com.example.ipainstaller.model.ConnectionState
 import com.example.ipainstaller.model.InstallState
+import com.example.ipainstaller.storage.PairRecordStorage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,7 +100,7 @@ class MainActivityBasic : Activity(), ConnectionManagerCallback {
         super.onCreate(savedInstanceState)
 
         val usbManager = getSystemService(USB_SERVICE) as UsbManager
-        connectionManager = DeviceConnectionManager(usbManager, this, this)
+        connectionManager = DeviceConnectionManager(usbManager, this, this, PairRecordStorage(this))
 
         buildUi()
         registerUsbReceiver()

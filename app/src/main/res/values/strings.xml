@@ -18,6 +18,7 @@
 
     <!-- U1: MIME filter -->
     <string name="invalid_file_type">Please select an .ipa file</string>
+    <string name="ipa_file_hint">Select a signed .ipa file from your device</string>
 
     <!-- U4: Reconnect -->
     <string name="reconnect">Reconnect</string>

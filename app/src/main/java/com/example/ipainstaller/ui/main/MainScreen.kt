@@ -101,6 +101,7 @@ fun MainScreen(viewModel: MainViewModel) {
         installHistory = installHistory,
         snackbarHostState = snackbarHostState,
         isPaired = connectionState is ConnectionState.Paired,
+        canSelectIpa = installState is InstallState.Idle,
         canInstall = selectedIpa != null
                 && connectionState is ConnectionState.Paired
                 && installState is InstallState.Idle,
@@ -113,13 +114,14 @@ fun MainScreen(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScreenContent(
+internal fun MainScreenContent(
     connectionState: ConnectionState,
     installState: InstallState,
     ipaInfo: IpaInfo?,
     installHistory: List<InstallRecord>,
     snackbarHostState: SnackbarHostState,
     isPaired: Boolean,
+    canSelectIpa: Boolean,
     canInstall: Boolean,
     onSelectIpa: () -> Unit,
     onInstall: () -> Unit,
@@ -128,7 +130,7 @@ private fun MainScreenContent(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("IPA Installer") })
+            TopAppBar(title = { Text(stringResource(R.string.app_name)) })
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
@@ -153,10 +155,18 @@ private fun MainScreenContent(
             item {
                 OutlinedButton(
                     onClick = onSelectIpa,
-                    enabled = isPaired,
+                    enabled = canSelectIpa,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(ipaInfo?.displayName ?: stringResource(R.string.select_ipa))
+                }
+                if (ipaInfo == null) {
+                    Text(
+                        stringResource(R.string.ipa_file_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
 
@@ -440,6 +450,7 @@ private fun PreviewDisconnected() {
             installHistory = emptyList(),
             snackbarHostState = SnackbarHostState(),
             isPaired = false,
+            canSelectIpa = true,
             canInstall = false,
             onSelectIpa = {},
             onInstall = {},
@@ -460,6 +471,7 @@ private fun PreviewPaired() {
             installHistory = sampleHistory,
             snackbarHostState = SnackbarHostState(),
             isPaired = true,
+            canSelectIpa = true,
             canInstall = true,
             onSelectIpa = {},
             onInstall = {},
@@ -480,6 +492,7 @@ private fun PreviewError() {
             installHistory = emptyList(),
             snackbarHostState = SnackbarHostState(),
             isPaired = false,
+            canSelectIpa = true,
             canInstall = false,
             onSelectIpa = {},
             onInstall = {},
@@ -500,6 +513,7 @@ private fun PreviewUploading() {
             installHistory = emptyList(),
             snackbarHostState = SnackbarHostState(),
             isPaired = true,
+            canSelectIpa = false,
             canInstall = false,
             onSelectIpa = {},
             onInstall = {},
@@ -520,6 +534,7 @@ private fun PreviewInstallSuccess() {
             installHistory = sampleHistory,
             snackbarHostState = SnackbarHostState(),
             isPaired = true,
+            canSelectIpa = false,
             canInstall = false,
             onSelectIpa = {},
             onInstall = {},
@@ -540,6 +555,7 @@ private fun PreviewInstallFailed() {
             installHistory = sampleHistory,
             snackbarHostState = SnackbarHostState(),
             isPaired = true,
+            canSelectIpa = false,
             canInstall = false,
             onSelectIpa = {},
             onInstall = {},

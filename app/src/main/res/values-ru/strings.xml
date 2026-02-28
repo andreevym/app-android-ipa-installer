@@ -18,6 +18,7 @@
 
     <!-- U1: MIME filter -->
     <string name="invalid_file_type">Выберите файл с расширением .ipa</string>
+    <string name="ipa_file_hint">Выберите подписанный .ipa файл с устройства</string>
 
     <!-- U4: Reconnect -->
     <string name="reconnect">Переподключить</string>
