@@ -15,4 +15,26 @@
     <string name="ios_version">iOS %s</string>
     <string name="ok">OK</string>
     <string name="dismiss">Dismiss</string>
+
+    <!-- U1: MIME filter -->
+    <string name="invalid_file_type">Please select an .ipa file</string>
+
+    <!-- U4: Reconnect -->
+    <string name="reconnect">Reconnect</string>
+
+    <!-- U5: IPA info -->
+    <string name="ipa_size">Size: %s</string>
+    <string name="ipa_bundle_id">Bundle ID: %s</string>
+    <string name="ipa_version">Version: %s</string>
+
+    <!-- U9: Notifications -->
+    <string name="notification_channel_name">Install Status</string>
+    <string name="notification_install_success">Installation Successful</string>
+    <string name="notification_install_failed">Installation Failed</string>
+
+    <!-- U10: History -->
+    <string name="install_history">Install History</string>
+    <string name="no_history">No installation history</string>
+    <string name="history_success">Success</string>
+    <string name="history_failed">Failed</string>
 </resources>

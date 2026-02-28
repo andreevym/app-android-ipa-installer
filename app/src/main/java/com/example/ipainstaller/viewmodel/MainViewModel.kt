@@ -1,28 +1,44 @@
 package com.example.ipainstaller.viewmodel
 
+import android.content.ContentResolver
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ipainstaller.data.InstallHistoryDao
+import com.example.ipainstaller.data.InstallRecord
 import com.example.ipainstaller.model.ConnectionState
 import com.example.ipainstaller.model.InstallState
+import com.example.ipainstaller.model.IpaInfo
+import com.example.ipainstaller.notification.InstallNotificationHelper
 import com.example.ipainstaller.usb.AppleDeviceDetector
 import com.example.ipainstaller.usb.UsbMuxConnection
 import com.example.ipainstaller.usb.UsbTransport
+import com.dd.plist.NSDictionary
+import com.dd.plist.PropertyListParser
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.zip.ZipInputStream
 import javax.inject.Inject
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val deviceDetector: AppleDeviceDetector,
     private val usbManager: UsbManager,
+    private val contentResolver: ContentResolver,
+    private val installHistoryDao: InstallHistoryDao,
+    private val notificationHelper: InstallNotificationHelper,
 ) : ViewModel() {
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -34,6 +50,12 @@ class MainViewModel @Inject constructor(
     private val _selectedIpa = MutableStateFlow<Uri?>(null)
     val selectedIpa: StateFlow<Uri?> = _selectedIpa.asStateFlow()
 
+    private val _ipaInfo = MutableStateFlow<IpaInfo?>(null)
+    val ipaInfo: StateFlow<IpaInfo?> = _ipaInfo.asStateFlow()
+
+    val installHistory = installHistoryDao.getAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // B11: Protect mutable device state with Mutex to prevent data races
     private val deviceMutex = Mutex()
     private var currentDevice: UsbDevice? = null
@@ -41,6 +63,7 @@ class MainViewModel @Inject constructor(
 
     init {
         observeDeviceEvents()
+        notificationHelper.createChannel()
     }
 
     private fun observeDeviceEvents() {
@@ -92,6 +115,12 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /** U4: Reconnect after error. */
+    fun reconnect() {
+        _connectionState.value = ConnectionState.Disconnected
+        scanForDevices()
+    }
+
     private fun connectToDevice(device: UsbDevice) {
         viewModelScope.launch {
             try {
@@ -111,8 +140,51 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    /** U5: Parse IPA info after file selection. */
     fun onIpaSelected(uri: Uri) {
         _selectedIpa.value = uri
+        viewModelScope.launch {
+            _ipaInfo.value = parseIpaInfo(uri)
+        }
+    }
+
+    private suspend fun parseIpaInfo(uri: Uri): IpaInfo? = withContext(Dispatchers.IO) {
+        try {
+            val displayName = contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: uri.lastPathSegment ?: "Unknown"
+
+            val size = contentResolver.query(
+                uri, arrayOf(OpenableColumns.SIZE), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else -1L
+            } ?: -1L
+
+            var bundleId: String? = null
+            var bundleVersion: String? = null
+
+            contentResolver.openInputStream(uri)?.use { inputStream ->
+                ZipInputStream(inputStream).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (entry.name.matches(Regex("Payload/[^/]+\\.app/Info\\.plist"))) {
+                            val plistBytes = zip.readBytes()
+                            val plist = PropertyListParser.parse(plistBytes) as? NSDictionary
+                            bundleId = plist?.get("CFBundleIdentifier")?.toJavaObject()?.toString()
+                            bundleVersion = plist?.get("CFBundleShortVersionString")?.toJavaObject()?.toString()
+                            break
+                        }
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+
+            IpaInfo(displayName, size, bundleId, bundleVersion)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun installIpa() {
@@ -120,6 +192,9 @@ class MainViewModel @Inject constructor(
 
         viewModelScope.launch {
             val connection = deviceMutex.withLock { muxConnection } ?: return@launch
+            val ipaName = _ipaInfo.value?.displayName ?: "Unknown IPA"
+            val deviceName = (_connectionState.value as? ConnectionState.Paired)
+                ?.deviceInfo?.deviceName ?: "Unknown"
 
             try {
                 _installState.value = InstallState.Uploading(0f)
@@ -136,8 +211,39 @@ class MainViewModel @Inject constructor(
                 // Placeholder for actual install logic
                 _installState.value = InstallState.Success
 
+                // U9: Notification
+                notificationHelper.showInstallComplete(true, ipaName)
+
+                // U10: Record history
+                installHistoryDao.insert(
+                    InstallRecord(
+                        ipaName = ipaName,
+                        bundleId = _ipaInfo.value?.bundleId,
+                        deviceName = deviceName,
+                        timestamp = System.currentTimeMillis(),
+                        success = true,
+                        errorMessage = null,
+                    )
+                )
+                installHistoryDao.deleteOld()
+
             } catch (e: Exception) {
-                _installState.value = InstallState.Failed(e.message ?: "Installation failed")
+                val error = e.message ?: "Installation failed"
+                _installState.value = InstallState.Failed(error)
+
+                notificationHelper.showInstallComplete(false, ipaName)
+
+                installHistoryDao.insert(
+                    InstallRecord(
+                        ipaName = ipaName,
+                        bundleId = _ipaInfo.value?.bundleId,
+                        deviceName = deviceName,
+                        timestamp = System.currentTimeMillis(),
+                        success = false,
+                        errorMessage = error,
+                    )
+                )
+                installHistoryDao.deleteOld()
             }
         }
     }
@@ -156,6 +262,7 @@ class MainViewModel @Inject constructor(
             _connectionState.value = ConnectionState.Disconnected
             _installState.value = InstallState.Idle
             _selectedIpa.value = null
+            _ipaInfo.value = null
         }
     }
 

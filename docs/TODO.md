@@ -20,55 +20,37 @@
 
 Эти проблемы делают приложение полностью нерабочим. Без их решения невозможна установка IPA.
 
-### 1. Бинарный протокол usbmuxd (version 0)
+### ~~1. Бинарный протокол usbmuxd (version 0)~~ ИСПРАВЛЕНО
 
 **Файлы:** `protocol/usbmuxd/MuxProtocol.kt`, `usb/UsbMuxConnection.kt`
 
-**Проблема:** Код реализует только plist-версию протокола (version 1), которая используется через Unix-сокет на десктопе. При прямом USB-подключении Android → iPhone нужна **бинарная версия (version 0)** с фиксированными структурами.
+~~**Проблема:** Код реализует только plist-версию протокола (version 1), которая используется через Unix-сокет на десктопе.~~
 
-**Что нужно:**
-- [ ] Реализовать бинарный формат заголовков usbmuxd v0
-- [ ] Реализовать бинарную сериализацию Connect/Listen/Result
-- [ ] Реализовать TCP-мультиплексирование поверх USB-пакетов
-- [ ] Определить, нужен ли plist-формат вообще, или достаточно бинарного
+**Исправлено:** Добавлена поддержка бинарного протокола v0 в `MuxProtocol` (`VERSION_BINARY`, `serializeBinaryConnect`, `parseBinaryResult`). `UsbMuxConnection` получил флаг `useBinaryProtocol` и метод `sendBinaryConnect()` для fallback на v0 при прямом USB-подключении. Plist v1 остаётся по умолчанию.
 
-**Референс:** `libimobiledevice/libusbmuxd` — файл `src/libusbmuxd.c`, функции `usbmuxd_send()`, `usbmuxd_recv()`
+### ~~2. Отсутствие TLS/SSL~~ ИСПРАВЛЕНО
 
-### 2. Отсутствие TLS/SSL
+**Файлы:** `crypto/TlsTransport.kt`, `protocol/lockdownd/LockdownClient.kt`, `usb/UsbTransport.kt`
 
-**Файлы:** `protocol/lockdownd/LockdownClient.kt`
+~~**Проблема:** После `StartSession` lockdownd требует переключения на TLS. Без TLS **невозможно** вызвать `StartService`.~~
 
-**Проблема:** После `StartSession` lockdownd требует переключения на TLS. Без TLS **невозможно** вызвать `StartService` — lockdownd откажет с ошибкой. Весь pipeline после пейринга нерабочий.
+**Исправлено:** Создан `TlsTransport` на базе BouncyCastle `bctls-jdk18on` (`TlsClientProtocol` + `DefaultTlsClient`). TLS 1.2 с mutual authentication: клиент предъявляет host certificate+key из PairRecord, сервер принимает любой (self-signed Apple certs). `UsbTransport` получил `asInputStream()`/`asOutputStream()` для TLS bridge. `LockdownClient.upgradeTls()` выполняет handshake и переключает read/write на шифрованный канал. `DeviceConnectionManager` вызывает TLS upgrade после `startSession()` перед `startService()`.
 
-**Что нужно:**
-- [ ] Реализовать TLS handshake через BouncyCastle JSSE
-- [ ] Создать кастомный `SSLContext` с TrustManager, принимающим самоподписанные сертификаты устройства
-- [ ] Обернуть `UsbTransport` в `SSLSocket`-подобный интерфейс (или использовать `SSLEngine`)
-- [ ] Реализовать переключение lockdownd-соединения на TLS после StartSession
-
-### 3. Заглушки в MainViewModel
+### ~~3. Заглушки в MainViewModel~~ ИСПРАВЛЕНО
 
 **Файл:** `viewmodel/MainViewModel.kt`
 
-**Проблема:** `connectToDevice()` и `installIpa()` — TODO-заглушки. Нет рабочего pipeline.
+~~**Проблема:** `connectToDevice()` и `installIpa()` — TODO-заглушки. Нет рабочего pipeline.~~
 
-**Что нужно:**
-- [ ] Реализовать полный pipeline подключения: usbmuxd handshake → lockdownd connect → pairing → TLS session
-- [ ] Реализовать полный pipeline установки: start AFC → upload IPA → start installation_proxy → install → cleanup
-- [ ] Получать `InputStream` из `ContentResolver` для чтения IPA-файла из `Uri`
-- [ ] Добавить обработку ошибок на каждом этапе
+**Исправлено:** `connectToDevice()` создаёт `DeviceConnectionManager` с `ConnectionManagerCallback`, который обновляет StateFlows, отправляет уведомления и записывает историю установок. `installIpa()` читает IPA из Uri через `ContentResolver.openInputStream()` и делегирует в `connectionManager.installIpa()`. Mutex защищает `connectionManager` reference.
 
-### 4. Хранение PairRecord
+### ~~4. Хранение PairRecord~~ ИСПРАВЛЕНО
 
-**Файлы:** `model/PairRecord.kt`, `crypto/PairingCrypto.kt`
+**Файлы:** `storage/PairRecordStorage.kt`, `di/AppModule.kt`, `connection/DeviceConnectionManager.kt`
 
-**Проблема:** PairRecord нигде не сохраняется. При каждом запуске приложения нужен повторный пейринг — пользователь должен каждый раз нажимать «Доверять» на iPhone.
+~~**Проблема:** PairRecord нигде не сохраняется. При каждом запуске приложения нужен повторный пейринг.~~
 
-**Что нужно:**
-- [ ] Создать `PairRecordStorage` (EncryptedSharedPreferences или файловое хранилище)
-- [ ] Сериализация PairRecord в/из plist
-- [ ] Поиск PairRecord по UDID устройства
-- [ ] Удаление устаревших PairRecord
+**Исправлено:** Создан `PairRecordStorage` — файловое хранилище в `context.filesDir/pair_records/{udid}.json` с JSON+Base64 сериализацией. Методы: `save()`, `load()`, `delete()`, `exists()`. Провайдер добавлен в `AppModule`. `DeviceConnectionManager.phaseDiscoverAndPair()` проверяет `pairRecordStorage.load(udid)` перед пейрингом — при повторном подключении "Trust" dialog не появляется.
 
 ---
 
@@ -301,46 +283,64 @@ class FakeTransport : UsbTransport {
 
 ## UX-УЛУЧШЕНИЯ
 
-### U1. MIME-фильтр для IPA
+### ~~U1. MIME-фильтр для IPA~~ РЕАЛИЗОВАНО
 
-Текущий `application/octet-stream` показывает все файлы. Использовать `"*/*"` с проверкой расширения `.ipa` после выбора.
+~~Текущий `application/octet-stream` показывает все файлы. Использовать `"*/*"` с проверкой расширения `.ipa` после выбора.~~
 
-### U2. Отображение имени файла
+**Реализовано:** Файловый пикер использует `*/*`, после выбора валидируется расширение `.ipa`. При неверном расширении показывается Snackbar.
 
-Использовать `ContentResolver.query()` + `OpenableColumns.DISPLAY_NAME` вместо `Uri.lastPathSegment`.
+### ~~U2. Отображение имени файла~~ ИСПРАВЛЕНО (B12)
 
-### U3. Прокрутка экрана
+~~Использовать `ContentResolver.query()` + `OpenableColumns.DISPLAY_NAME` вместо `Uri.lastPathSegment`.~~
 
-Обернуть содержимое `MainScreen` в `LazyColumn` или `verticalScroll` для маленьких экранов.
+### ~~U3. Прокрутка экрана~~ РЕАЛИЗОВАНО
 
-### U4. Кнопка переподключения
+~~Обернуть содержимое `MainScreen` в `LazyColumn` или `verticalScroll` для маленьких экранов.~~
 
-Добавить кнопку «Переподключить» в карточке устройства при ошибке.
+**Реализовано:** `MainScreen` использует `LazyColumn` для прокрутки контента и истории установок.
 
-### U5. Информация об IPA
+### ~~U4. Кнопка переподключения~~ РЕАЛИЗОВАНО
 
-После выбора файла показать: имя, размер, bundle ID (парсить Info.plist из ZIP).
+~~Добавить кнопку «Переподключить» в карточке устройства при ошибке.~~
 
-### U6. Compose Preview
+**Реализовано:** Кнопка «Reconnect» с иконкой Refresh в `DeviceStatusCard` при `ConnectionState.Error`. ViewModel метод `reconnect()`.
 
-Добавить `@Preview` функции для всех Composable-компонентов для удобства разработки.
+### ~~U5. Информация об IPA~~ РЕАЛИЗОВАНО
 
-### U7. Локализация
+~~После выбора файла показать: имя, размер, bundle ID (парсить Info.plist из ZIP).~~
 
-- [ ] Добавить `values-ru/strings.xml`
-- [ ] Перенести захардкоженные строки в ресурсы
+**Реализовано:** `IpaInfo` модель с `displayName`, `sizeBytes`, `bundleId`, `bundleVersion`. Парсинг Info.plist из ZIP через `dd-plist`. Карточка `IpaInfoCard` отображает данные.
 
-### U8. Тема
+### ~~U6. Compose Preview~~ РЕАЛИЗОВАНО
 
-Заменить `android:Theme.Material.Light.NoActionBar` на `Theme.Material3.Light.NoActionBar` в `themes.xml`.
+~~Добавить `@Preview` функции для всех Composable-компонентов для удобства разработки.~~
 
-### U9. Уведомления
+**Реализовано:** 6 `@Preview` функций: Disconnected, Paired+IPA, Error, Uploading, Install Success, Install Failed.
 
-Показывать уведомление при завершении установки (если приложение в фоне).
+### ~~U7. Локализация~~ РЕАЛИЗОВАНО
 
-### U10. История установок
+- [x] Добавить `values-ru/strings.xml`
+- [x] Перенести захардкоженные строки в ресурсы
 
-Хранить историю успешных/неудачных установок (Room DB).
+**Реализовано:** Полная русская локализация всех строк включая новые (U1, U4, U5, U9, U10).
+
+### ~~U8. Тема~~ РЕАЛИЗОВАНО
+
+~~Заменить `android:Theme.Material.Light.NoActionBar` на `Theme.Material3.Light.NoActionBar` в `themes.xml`.~~
+
+**Реализовано:** XML-тема обновлена на Material3. Добавлена зависимость `com.google.android.material`.
+
+### ~~U9. Уведомления~~ РЕАЛИЗОВАНО
+
+~~Показывать уведомление при завершении установки (если приложение в фоне).~~
+
+**Реализовано:** `InstallNotificationHelper` с каналом `install_status`, `POST_NOTIFICATIONS` permission в манифесте. Уведомления при Success/Failed.
+
+### ~~U10. История установок~~ РЕАЛИЗОВАНО
+
+~~Хранить историю успешных/неудачных установок (Room DB).~~
+
+**Реализовано:** Room DB с `InstallRecord` entity, `InstallHistoryDao`, `AppDatabase`. Секция истории в `MainScreen` с иконками Success/Failed. Автоочистка старых записей.
 
 ---
 
@@ -390,7 +390,7 @@ class FakeTransport : UsbTransport {
 | 2.2 | Обработка ошибок и retry-логика | Средняя |
 | 2.3 | Отмена операций (upload, install) | Средняя |
 | 2.4 | Логирование для отладки | Низкая |
-| 2.5 | UX-исправления (U1–U8) | Низкая |
+| ~~2.5~~ | ~~UX-исправления (U1–U10)~~ | ~~Низкая~~ ✅ |
 
 ### Фаза 3: Расширенный функционал
 
