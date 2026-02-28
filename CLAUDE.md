@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **app-android-ipa-installer** — An Android application that installs IPA files onto iOS devices connected via USB OTG cable, **without requiring Android root access**. Inspired by [OTGLocation](https://github.com/cczhr/OTGLocation) which communicates with iOS over USB from Android (but requires root).
 
+**Current status:** ~80% ready. Pipeline functional (USB → pairing → TLS → AFC → install). 47 tests (13 unit + 34 instrumented). See [docs/TODO.md](docs/TODO.md) for remaining tasks.
+
 ### Key Difference from OTGLocation
 
 OTGLocation uses cross-compiled `usbmuxd` + `libimobiledevice` native binaries executed via `su` (root). This project must achieve the same iOS USB communication **without root** by implementing the usbmuxd protocol directly in Kotlin/JVM using Android's USB Host API (`android.hardware.usb`).
@@ -77,54 +79,111 @@ Android's USB Host API provides userspace USB access without root:
 
 The key insight: OTGLocation's root requirement comes from running `usbmuxd` daemon with `libusb`. By reimplementing the usbmuxd wire protocol in Kotlin and using Android's USB Host API directly, root is unnecessary.
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/README.md](docs/README.md) | Project overview, quick start, how it works |
+| [docs/architecture.md](docs/architecture.md) | Detailed architecture: USB layer, Apple protocols, crypto, pipeline |
+| [docs/TODO.md](docs/TODO.md) | Scenario-based task tracking (S1-S10, T-01 to T-38, P0-P3 priorities) |
+
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Language | Kotlin (latest stable) |
+| Language | Kotlin 2.1 |
 | Min SDK | 24 (Android 7.0) |
-| Target SDK | 34 (Android 14) |
+| Target SDK | 35 (Android 15) |
 | UI | Jetpack Compose + Material 3 |
 | Build | Gradle (Kotlin DSL), AGP |
 | Architecture | MVVM, Kotlin Coroutines + Flow |
 | USB | android.hardware.usb (USB Host API) |
-| TLS | BouncyCastle (for Apple pairing certificates) |
-| Plist | dd-plist or custom binary plist parser |
+| TLS | BouncyCastle bctls-jdk18on (TLS 1.2 mutual auth) |
+| Plist | dd-plist |
 | DI | Hilt |
+| DB | Room (install history) |
 | File picker | SAF (Storage Access Framework) |
 
-## Build & Development
+## Build, Test & Deploy
+
+### Build
 
 ```bash
-# Build debug APK
+# Gradle build (Compose + Hilt, full-featured)
 ./gradlew assembleDebug
+# Output: app/build/outputs/apk/debug/app-debug.apk
 
-# Build release APK
-./gradlew assembleRelease
+# Manual build (plain Views, no Gradle — see /build-manual skill)
+# Output: build-manual/apk/app-debug.apk
+```
 
-# Run unit tests
+### Test
+
+```bash
+# Unit tests (13 tests — protocol layers, crypto, serialization)
 ./gradlew test
 
-# Run single test class
+# Single test class
 ./gradlew test --tests "com.example.ipainstaller.protocol.UsbmuxdProtocolTest"
 
-# Run instrumented tests (connected device)
+# Instrumented UI tests (34 tests — requires connected device)
 ./gradlew connectedAndroidTest
 
 # Lint
 ./gradlew lint
-
-# Clean build
-./gradlew clean
 ```
+
+### Deploy to device
+
+```bash
+# Install APK on connected Android device
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Launch (Gradle build — Compose UI)
+adb shell am start -n com.example.ipainstaller/.ui.main.MainActivity
+
+# Launch (Manual build — plain Views)
+adb shell am start -n com.example.ipainstaller/.ui.main.MainActivityBasic
+
+# View app logs
+adb logcat --pid=$(adb shell pidof com.example.ipainstaller) -v time
+```
+
+### Create test IPA
+
+```bash
+# Using make
+make ipa-test        # creates test-ipa/TestApp.ipa
+make ipa-push        # pushes to /sdcard/Download/TestApp.ipa
+```
+
+### Release
+
+```bash
+# Build APK, then create GitHub release
+./gradlew assembleDebug
+gh release create v0.X.0 app/build/outputs/apk/debug/app-debug.apk --title "v0.X.0" --notes "..."
+```
+
+## Claude Code Skills
+
+Project-level skills (`.claude/commands/`):
+
+| Skill | Command | Description |
+|-------|---------|-------------|
+| build-gradle | `/build-gradle` | Build debug APK via Gradle (Compose + Hilt) |
+| build-manual | `/build-manual` | Build debug APK without Gradle (aapt2 + kotlinc + d8) |
+| deploy | `/deploy` | Install APK on device and launch with logcat |
+| release | `/release` | Create GitHub release with APK + test IPA |
+| test-ipa | `/test-ipa` | Generate dummy IPA for testing the upload pipeline |
+| usb-debug | `/usb-debug` | Diagnose USB OTG connection issues with iOS devices |
 
 ## Package Structure
 
 ```
 com.example.ipainstaller/
 ├── ui/                     # Compose UI screens
-│   ├── main/              # Main screen (device status, file picker)
-│   ├── install/           # Installation progress screen
+│   ├── main/              # Main screen (device status, file picker, history)
 │   └── theme/             # Material 3 theme
 ├── usb/                    # Android USB Host API wrapper
 │   ├── AppleDeviceDetector # VID 0x05AC detection + permission
@@ -132,14 +191,16 @@ com.example.ipainstaller/
 │   └── UsbMuxConnection    # USB → usbmuxd bridge
 ├── protocol/               # Apple protocol implementations
 │   ├── usbmuxd/           # usbmuxd wire protocol (header, plist messages)
-│   ├── lockdownd/         # lockdownd protocol (pairing, service start)
+│   ├── lockdownd/         # lockdownd protocol (pairing, service start, TLS upgrade)
 │   ├── afc/               # AFC file transfer protocol
 │   └── installproxy/      # installation_proxy protocol
-├── plist/                  # Binary & XML plist serialization
-├── crypto/                 # TLS pairing, certificate generation (BouncyCastle)
-├── model/                  # Data classes (DeviceInfo, InstallProgress, etc.)
-├── viewmodel/              # ViewModels for MVVM
-└── di/                     # Hilt modules
+├── connection/             # DeviceConnectionManager (3-phase pipeline orchestrator)
+├── crypto/                 # TLS transport, pairing crypto, certificate generation
+├── storage/                # PairRecordStorage (persistent pair records)
+├── data/                   # Room DB (AppDatabase, InstallHistoryDao, InstallRecord)
+├── model/                  # Data classes (ConnectionState, InstallState, IpaInfo)
+├── viewmodel/              # MainViewModel (MVVM)
+└── di/                     # Hilt modules (AppModule)
 ```
 
 ## Critical Implementation Notes
@@ -156,10 +217,11 @@ com.example.ipainstaller/
 - Must call `UsbDeviceConnection.claimInterface()` on this interface
 
 ### Pairing Without iTunes/Finder
-- First-time pairing requires generating a root CA, host certificate, and device certificate
-- Pair records must be stored locally (SharedPreferences or app files)
+- First-time pairing requires generating a root CA, host certificate, and device certificate (`PairingCrypto`)
+- Pair records stored in `filesDir/pair_records/{udid}.json` via `PairRecordStorage` (JSON+Base64)
 - The "Trust This Computer?" dialog appears on the iOS device during first pairing
-- Subsequent connections use stored pair records
+- Subsequent connections use stored pair records (auto-loaded by `DeviceConnectionManager`)
+- TLS 1.2 mutual auth via `TlsTransport` (BouncyCastle bctls-jdk18on) after `startSession()`
 
 ### iOS Version Considerations
 - iOS 17+ changed the DeveloperDiskImage approach to use "personalized" disk images (DDI)
