@@ -13,11 +13,14 @@ import org.bouncycastle.openssl.jcajce.JcaPEMWriter
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.StringWriter
 import java.math.BigInteger
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.Security
 import java.security.cert.X509Certificate
+import java.security.spec.X509EncodedKeySpec
 import java.util.Date
 import java.util.UUID
 
@@ -58,6 +61,54 @@ object PairingCrypto {
             rootCertificate = toPem(rootCert),
             rootPrivateKey = toPem(rootKeyPair),
         )
+    }
+
+    fun generatePairRecordWithDeviceKey(devicePublicKeyDer: ByteArray): PairRecord {
+        val rootKeyPair = generateKeyPair()
+        val rootCert = generateSelfSignedCert(rootKeyPair, "Apple Root CA (ipainstaller)")
+
+        val hostKeyPair = generateKeyPair()
+        val hostCert = generateSignedCert(hostKeyPair, rootKeyPair, rootCert, "ipainstaller Host")
+
+        val devicePublicKey = KeyFactory.getInstance("RSA", BouncyCastleProvider.PROVIDER_NAME)
+            .generatePublic(X509EncodedKeySpec(devicePublicKeyDer))
+        val deviceCert = generateDeviceCert(devicePublicKey, rootKeyPair, rootCert)
+
+        return PairRecord(
+            hostId = UUID.randomUUID().toString().uppercase(),
+            systemBuid = UUID.randomUUID().toString().uppercase(),
+            hostCertificate = toPem(hostCert),
+            hostPrivateKey = toPem(hostKeyPair),
+            deviceCertificate = toPem(deviceCert),
+            rootCertificate = toPem(rootCert),
+            rootPrivateKey = toPem(rootKeyPair),
+        )
+    }
+
+    private fun generateDeviceCert(
+        devicePublicKey: PublicKey,
+        issuerKeyPair: KeyPair,
+        issuerCert: X509Certificate,
+    ): X509Certificate {
+        val now = Date()
+        val notAfter = Date(now.time + VALIDITY_YEARS * 365L * 24 * 60 * 60 * 1000)
+
+        val builder = JcaX509v3CertificateBuilder(
+            issuerCert,
+            BigInteger(128, SecureRandom()),
+            now,
+            notAfter,
+            X500Name("CN=Device Certificate"),
+            devicePublicKey,
+        )
+
+        val signer = JcaContentSignerBuilder("SHA256WithRSAEncryption")
+            .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+            .build(issuerKeyPair.private)
+
+        return JcaX509CertificateConverter()
+            .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+            .getCertificate(builder.build(signer))
     }
 
     private fun generateKeyPair(): KeyPair {

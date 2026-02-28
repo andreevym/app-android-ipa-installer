@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * Low-level USB transport for communicating with an iOS device.
@@ -181,6 +183,59 @@ class UsbTransport private constructor(
             offset += received
         }
         result
+    }
+
+    fun asInputStream(): InputStream = object : InputStream() {
+        private var buffer: ByteArray? = null
+        private var bufferOffset = 0
+        private var bufferLength = 0
+
+        override fun read(): Int {
+            if (bufferOffset >= bufferLength) {
+                fillBuffer()
+                if (bufferLength <= 0) return -1
+            }
+            return buffer!![bufferOffset++].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (bufferOffset >= bufferLength) {
+                fillBuffer()
+                if (bufferLength <= 0) return -1
+            }
+            val available = bufferLength - bufferOffset
+            val toRead = minOf(len, available)
+            System.arraycopy(buffer!!, bufferOffset, b, off, toRead)
+            bufferOffset += toRead
+            return toRead
+        }
+
+        private fun fillBuffer() {
+            val buf = ByteArray(16384)
+            val received = connection.bulkTransfer(endpointIn, buf, buf.size, TIMEOUT_MS)
+            if (received < 0) throw IOException("USB bulk read failed")
+            buffer = buf
+            bufferOffset = 0
+            bufferLength = received
+        }
+    }
+
+    fun asOutputStream(): OutputStream = object : OutputStream() {
+        override fun write(b: Int) {
+            write(byteArrayOf(b.toByte()))
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            var offset = off
+            var remaining = len
+            while (remaining > 0) {
+                val sent = connection.bulkTransfer(endpointOut, b, offset, remaining, TIMEOUT_MS)
+                if (sent < 0) throw IOException("USB bulk write failed")
+                offset += sent
+                remaining -= sent
+            }
+        }
     }
 
     override fun close() {

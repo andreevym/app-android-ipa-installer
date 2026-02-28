@@ -1,6 +1,6 @@
 # IPA Installer: Сценарный анализ и задачи
 
-**Текущая готовность: ~80%** — Pipeline функционален (USB -> пейринг -> TLS -> AFC -> установка), 13 unit-тестов, полный UI с Material 3, Room DB история, уведомления, локализация (EN/RU).
+**Текущая готовность: ~80%** — Pipeline функционален (USB -> пейринг -> TLS -> AFC -> установка), 47 тестов (13 unit + 34 instrumented), полный UI с Material 3, Room DB история, уведомления, локализация (EN/RU).
 
 **Что работает:** обнаружение устройства, получение USB-разрешения, пейринг с сохранением PairRecord, TLS-сессия, загрузка IPA через AFC (streaming), установка через installation_proxy, отображение прогресса, Reconnect.
 
@@ -76,7 +76,7 @@
 | T-29 | S9: Несколько устройств | UI выбора устройства, список подключённых | `MainScreen.kt`, `MainViewModel.kt` |
 | T-30 | S9: Список/удаление приложений | Browse + Uninstall через installation_proxy | `InstallationProxyClient.kt`, новый UI |
 | T-31 | S9: Экспорт логов | Кнопка Share logs -> файл/Intent | `MainViewModel.kt`, `MainScreen.kt` |
-| T-37 | S10: Compose UI тесты | Snapshot-тесты для разных состояний экрана | Новые instrumented-тесты |
+| ~~T-37~~ | ~~S10: Compose UI тесты~~ | ~~34 instrumented-теста: MainScreen (16), IpaSelection (9), InstallHistory (9)~~ | ~~Done~~ |
 | T-38 | S10: Оптимизации O1-O4 | Буферы, batching GetValue, настраиваемые таймауты, ProGuard | Различные файлы |
 
 ---
@@ -265,7 +265,7 @@ Reconnect после ошибок, отмена blocking-операций пол
 | T-34 | PairRecordStorage round-trip тест (save -> load -> verify) | P2 | Новый `PairRecordStorageTest.kt` |
 | T-35 | TlsTransport unit-тест (mock handshake) | P2 | Новый `TlsTransportTest.kt` |
 | T-36 | Accessibility: `contentDescription` для всех иконок | P2 | `MainScreen.kt` |
-| T-37 | Compose UI snapshot-тесты | P3 | Новые instrumented-тесты |
+| ~~T-37~~ | ~~Compose UI тесты — 34 instrumented-теста~~ | ~~P3~~ | ~~Done~~ |
 | T-38 | Оптимизации: буферы (O1), batching GetValue (O2), таймауты USB (O3), ProGuard (O4) | P3 | Различные файлы |
 
 ---
@@ -296,7 +296,7 @@ Reconnect после ошибок, отмена blocking-операций пол
 
 | # | Задача | Задачи TODO | Сложность | Статус |
 |---|--------|-------------|-----------|--------|
-| 2.1 | Unit-тесты протоколов | — | Средняя | Done (13 тестов) |
+| 2.1 | Unit-тесты протоколов | — | Средняя | Done (13 unit-тестов) |
 | 2.2 | Таймауты на blocking-операции | T-04, T-09, T-18, T-19 | Средняя | TODO |
 | 2.3 | Обработка ошибок протоколов | T-05, T-06, T-07, T-10, T-11, T-16, T-20 | Средняя | TODO |
 | 2.4 | Отмена операций mid-progress | T-17, T-21, T-26 | Средняя | TODO |
@@ -310,23 +310,23 @@ Reconnect после ошибок, отмена blocking-операций пол
 
 ### Фаза 3: Расширенный функционал
 
-| # | Задача | Задачи TODO | Сложность |
-|---|--------|-------------|-----------|
-| 3.1 | Поддержка iOS 17+ (RemoteXPC) | T-28 | Высокая |
-| 3.2 | Множественные устройства | T-29 | Средняя |
-| 3.3 | Список/удаление приложений | T-30 | Средняя |
-| 3.4 | Signing info в UI | T-13 | Низкая |
-| 3.5 | Экспорт логов | T-31 | Низкая |
-| 3.6 | Compose UI тесты | T-37 | Средняя |
-| 3.7 | Оптимизации (O1-O4) | T-38 | Низкая |
+| # | Задача | Задачи TODO | Сложность | Статус |
+|---|--------|-------------|-----------|--------|
+| 3.1 | Поддержка iOS 17+ (RemoteXPC) | T-28 | Высокая | TODO |
+| 3.2 | Множественные устройства | T-29 | Средняя | TODO |
+| 3.3 | Список/удаление приложений | T-30 | Средняя | TODO |
+| 3.4 | Signing info в UI | T-13 | Низкая | TODO |
+| 3.5 | Экспорт логов | T-31 | Низкая | TODO |
+| 3.6 | Compose UI тесты | T-37 | Средняя | Done (34 теста) |
+| 3.7 | Оптимизации (O1-O4) | T-38 | Низкая | TODO |
 
 ### Оценка прогресса
 
 | Фаза | Статус |
 |-------|--------|
 | Фаза 1 | Done — pipeline функционален |
-| Фаза 2 | ~40% — тесты протоколов и UX готовы; нужны: таймауты, обработка ошибок, отмена, streaming fix, тесты ViewModel |
-| Фаза 3 | ~30% — IPA info, история, уведомления готовы; нужны: iOS 17+, множественные устройства, управление приложениями |
+| Фаза 2 | ~45% — тесты протоколов (13 unit) и UX готовы; нужны: таймауты, обработка ошибок, отмена, streaming fix, тесты ViewModel |
+| Фаза 3 | ~40% — IPA info, история, уведомления, UI-тесты (34 instrumented) готовы; нужны: iOS 17+, множественные устройства, управление приложениями |
 
 ---
 
@@ -363,6 +363,7 @@ Reconnect после ошибок, отмена blocking-операций пол
 - MIME-фильтр IPA, отображение имени файла, прокрутка экрана, кнопка Reconnect
 - IPA info (bundleId, version, size), Compose Previews (6 шт)
 - Локализация EN/RU, Material 3 тема, уведомления, история установок (Room DB)
+- Кнопка «Выбрать IPA» доступна без подключённого устройства (canSelectIpa), подсказка файла
 
 ### Функционал F1-F8 (частично реализован)
 
@@ -379,7 +380,9 @@ Reconnect после ошибок, отмена blocking-операций пол
 
 ---
 
-## Существующие тесты (13 шт)
+## Существующие тесты (47 шт)
+
+### Unit-тесты (13 шт)
 
 | Тест | Описание | Приоритет |
 |------|----------|-----------|
@@ -396,3 +399,54 @@ Reconnect после ошибок, отмена blocking-операций пол
 | `InstallProxyClientTest` | Парсинг progress-обновлений | P2 |
 | `PlistUtilTest` | Парсинг XML и бинарных plist | P2 |
 | `PairRecordTest` | Сериализация/десериализация PairRecord | P2 |
+
+### Instrumented UI-тесты (34 шт)
+
+**MainScreenTest (16 тестов):**
+
+| Тест | Описание |
+|------|----------|
+| `selectIpaButton_isDisplayed_andEnabled` | Кнопка «Выбрать IPA» отображается и активна |
+| `selectIpaButton_callsCallback_onClick` | Нажатие вызывает callback `onSelectIpa` |
+| `selectIpaButton_showsFileName_whenIpaSelected` | Кнопка показывает имя файла после выбора |
+| `installButton_isDisplayed_whenCanInstall` | Кнопка «Установить» видна при `canInstall=true` |
+| `installButton_isHidden_whenCannotInstall` | Кнопка скрыта при `canInstall=false` |
+| `installButton_callsCallback_onClick` | Нажатие вызывает callback `onInstall` |
+| `deviceStatus_showsDisconnected` | Статус «Отключено» отображается |
+| `deviceStatus_showsConnecting` | Статус «Подключение» отображается |
+| `deviceStatus_showsConnected_withDeviceName` | Имя устройства отображается при подключении |
+| `deviceStatus_showsPaired` | Статус «Сопряжено» отображается |
+| `installProgress_showsUploading` | Прогресс загрузки отображается |
+| `installProgress_showsInstalling` | Прогресс установки отображается |
+| `installProgress_showsSuccess` | Успешное завершение отображается |
+| `installProgress_showsError` | Ошибка установки отображается |
+| `reconnectButton_isDisplayed_onError` | Кнопка Reconnect видна при ошибке |
+| `ipaInfoCard_showsDetails` | IpaInfoCard показывает bundleId, version, size |
+
+**IpaSelectionTest (9 тестов):**
+
+| Тест | Описание |
+|------|----------|
+| `ipaFile_isParsedCorrectly_fromContentUri` | Парсинг Info.plist из .ipa через ContentResolver |
+| `ipaFile_sizeIsPositive` | Размер IPA файла > 0 |
+| `ipaFile_displayNameIsCorrect` | DisplayName из ContentResolver = имя файла |
+| `ipaExtension_isAccepted` | Расширение .ipa принимается |
+| `ipaExtension_caseInsensitive` | .IPA, .Ipa — принимаются (case insensitive) |
+| `nonIpaExtension_isRejected` | .txt, .apk, .zip — отклоняются |
+| `ui_showsIpaInfo_afterFileSelected` | IpaInfoCard отображается после выбора |
+| `ui_showsSelectButton_whenNoFileSelected` | Кнопка «Выбрать» + подсказка при пустом выборе |
+| `ui_selectButton_showsFileName_whenIpaSelected` | Кнопка меняет текст на имя файла |
+
+**InstallHistoryTest (9 тестов):**
+
+| Тест | Описание |
+|------|----------|
+| `dao_insertAndRetrieve_singleRecord` | Вставка и чтение одной записи |
+| `dao_insertAndRetrieve_failedRecord` | Запись с ошибкой сохраняется корректно |
+| `dao_retrievesInReverseChronologicalOrder` | Записи в обратном хронологическом порядке |
+| `dao_limitsTo50Records` | DAO возвращает максимум 50 записей |
+| `dao_deleteOld_keepsOnly100Records` | `deleteOld()` оставляет 100 записей в БД |
+| `ui_showsHistorySection_withRecords` | Секция истории видна при наличии записей |
+| `ui_hidesHistorySection_whenEmpty` | Секция скрыта при пустой истории |
+| `ui_showsSuccessAndFailedRecords_withCorrectLabels` | Успешные и неуспешные записи различаются |
+| `ui_showsDeviceNameAndDate_inHistoryItem` | Имя устройства и дата в элементе истории |

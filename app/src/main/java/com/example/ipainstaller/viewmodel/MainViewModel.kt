@@ -1,24 +1,27 @@
 package com.example.ipainstaller.viewmodel
 
 import android.content.ContentResolver
+import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ipainstaller.connection.ConnectionManagerCallback
+import com.example.ipainstaller.connection.DeviceConnectionManager
 import com.example.ipainstaller.data.InstallHistoryDao
 import com.example.ipainstaller.data.InstallRecord
 import com.example.ipainstaller.model.ConnectionState
 import com.example.ipainstaller.model.InstallState
 import com.example.ipainstaller.model.IpaInfo
 import com.example.ipainstaller.notification.InstallNotificationHelper
+import com.example.ipainstaller.storage.PairRecordStorage
 import com.example.ipainstaller.usb.AppleDeviceDetector
-import com.example.ipainstaller.usb.UsbMuxConnection
-import com.example.ipainstaller.usb.UsbTransport
 import com.dd.plist.NSDictionary
 import com.dd.plist.PropertyListParser
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -39,6 +42,8 @@ class MainViewModel @Inject constructor(
     private val contentResolver: ContentResolver,
     private val installHistoryDao: InstallHistoryDao,
     private val notificationHelper: InstallNotificationHelper,
+    private val pairRecordStorage: PairRecordStorage,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -59,7 +64,7 @@ class MainViewModel @Inject constructor(
     // B11: Protect mutable device state with Mutex to prevent data races
     private val deviceMutex = Mutex()
     private var currentDevice: UsbDevice? = null
-    private var muxConnection: UsbMuxConnection? = null
+    private var connectionManager: DeviceConnectionManager? = null
 
     init {
         observeDeviceEvents()
@@ -125,15 +130,32 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _connectionState.value = ConnectionState.Pairing
-                val transport = UsbTransport.open(usbManager, device)
+
+                val manager = DeviceConnectionManager(
+                    usbManager = usbManager,
+                    context = appContext,
+                    callback = object : ConnectionManagerCallback {
+                        override fun onConnectionStateChanged(state: ConnectionState) {
+                            _connectionState.value = state
+                        }
+
+                        override fun onInstallStateChanged(state: InstallState) {
+                            _installState.value = state
+                        }
+
+                        override fun onLog(message: String) {
+                            // Log messages available via callback
+                        }
+                    },
+                    pairRecordStorage = pairRecordStorage,
+                )
+
                 deviceMutex.withLock {
-                    muxConnection = UsbMuxConnection(transport)
+                    connectionManager?.destroy()
+                    connectionManager = manager
                 }
 
-                // TODO: Perform usbmuxd handshake, pairing, and get device info
-                // For now, move to Pairing state — full implementation will query
-                // lockdownd for device info and handle the Trust dialog
-
+                manager.onPermissionGranted(device)
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.Error(e.message ?: "Connection failed")
             }
@@ -191,7 +213,7 @@ class MainViewModel @Inject constructor(
         val uri = _selectedIpa.value ?: return
 
         viewModelScope.launch {
-            val connection = deviceMutex.withLock { muxConnection } ?: return@launch
+            val manager = deviceMutex.withLock { connectionManager } ?: return@launch
             val ipaName = _ipaInfo.value?.displayName ?: "Unknown IPA"
             val deviceName = (_connectionState.value as? ConnectionState.Paired)
                 ?.deviceInfo?.deviceName ?: "Unknown"
@@ -199,17 +221,14 @@ class MainViewModel @Inject constructor(
             try {
                 _installState.value = InstallState.Uploading(0f)
 
-                // TODO: Full install pipeline
-                // 1. Start lockdownd session
-                // 2. Start AFC service
-                // 3. Upload IPA via AFC to /PublicStaging/
-                // 4. Start installation_proxy service
-                // 5. Send Install command with progress tracking
+                // Read IPA data from Uri
+                val ipaData = withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw Exception("Cannot read IPA file")
+                }
 
-                _installState.value = InstallState.Installing(0f, "Preparing…")
-
-                // Placeholder for actual install logic
-                _installState.value = InstallState.Success
+                val fileName = _ipaInfo.value?.displayName ?: "app.ipa"
+                manager.installIpa(ipaData, fileName)
 
                 // U9: Notification
                 notificationHelper.showInstallComplete(true, ipaName)
@@ -255,8 +274,8 @@ class MainViewModel @Inject constructor(
     private fun disconnect() {
         viewModelScope.launch {
             deviceMutex.withLock {
-                muxConnection?.close()
-                muxConnection = null
+                connectionManager?.destroy()
+                connectionManager = null
                 currentDevice = null
             }
             _connectionState.value = ConnectionState.Disconnected
@@ -268,6 +287,6 @@ class MainViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        muxConnection?.close()
+        connectionManager?.destroy()
     }
 }

@@ -3,6 +3,7 @@ package com.example.ipainstaller.protocol.lockdownd
 import com.dd.plist.NSDictionary
 import com.dd.plist.NSString
 import com.dd.plist.PropertyListParser
+import com.example.ipainstaller.crypto.TlsTransport
 import com.example.ipainstaller.model.DeviceInfo
 import com.example.ipainstaller.model.PairRecord
 import java.io.IOException
@@ -19,8 +20,8 @@ import java.nio.ByteOrder
  * Handles device info queries, pairing, session start, and service lookup.
  */
 class LockdownClient(
-    private val readFn: suspend (Int) -> ByteArray,
-    private val writeFn: suspend (ByteArray) -> Unit,
+    private var readFn: suspend (Int) -> ByteArray,
+    private var writeFn: suspend (ByteArray) -> Unit,
 ) {
     companion object {
         const val LOCKDOWN_PORT = 62078
@@ -138,6 +139,12 @@ class LockdownClient(
         val enableSSL = (response["EnableServiceSSL"] as? com.dd.plist.NSNumber)?.boolValue() ?: false
 
         return ServiceDescriptor(port = port, enableSSL = enableSSL)
+    }
+
+    fun upgradeTls(tlsTransport: TlsTransport) {
+        tlsTransport.performHandshake()
+        readFn = { size -> tlsTransport.read(size) }
+        writeFn = { data -> tlsTransport.write(data) }
     }
 
     data class ServiceDescriptor(val port: Int, val enableSSL: Boolean)

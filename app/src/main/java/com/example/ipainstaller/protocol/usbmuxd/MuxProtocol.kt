@@ -16,6 +16,7 @@ import java.nio.ByteOrder
  */
 object MuxProtocol {
 
+    const val VERSION_BINARY = 0
     const val VERSION_PLIST = 1
 
     // Message types in the header
@@ -142,5 +143,26 @@ object MuxProtocol {
             }
             else -> throw IOException("Unknown usbmuxd message type: $messageType")
         }
+    }
+
+    fun serializeBinaryConnect(deviceId: Int, port: Int, tag: Int): ByteArray {
+        val payloadSize = 8
+        val totalSize = MuxHeader.SIZE + payloadSize
+        val buf = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN)
+        buf.putInt(totalSize)
+        buf.putInt(VERSION_BINARY)
+        buf.putInt(TYPE_CONNECT)
+        buf.putInt(tag)
+        buf.putInt(deviceId)
+        buf.order(ByteOrder.BIG_ENDIAN)
+        buf.putShort(port.toShort())
+        buf.putShort(0)
+        return buf.array()
+    }
+
+    fun parseBinaryResult(payload: ByteArray): MuxMessage.Result {
+        if (payload.size < 4) return MuxMessage.Result(-1)
+        val resultCode = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN).getInt()
+        return MuxMessage.Result(resultCode)
     }
 }
