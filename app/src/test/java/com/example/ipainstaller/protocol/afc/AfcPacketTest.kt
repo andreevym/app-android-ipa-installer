@@ -18,16 +18,6 @@ class AfcPacketTest {
     private class PacketCapture {
         val packets = mutableListOf<ByteArray>()
         val writeFn: suspend (ByteArray) -> Unit = { packets.add(it.copyOf()) }
-        val readFn: suspend (Int) -> ByteArray = { size ->
-            // Return a valid AFC status response (operation = 1, status = 0)
-            val buf = ByteBuffer.allocate(maxOf(size, 40)).order(ByteOrder.LITTLE_ENDIAN)
-            buf.put(MAGIC)
-            buf.putLong(48L) // entireLength = header(40) + status(8)
-            buf.putLong(48L) // thisLength = header(40) + status(8)
-            buf.putLong(0L)  // packetNum
-            buf.putLong(1L)  // operation = AFC_OP_STATUS
-            buf.array().copyOf(size)
-        }
     }
 
     @Test
