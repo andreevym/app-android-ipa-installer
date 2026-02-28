@@ -1,414 +1,398 @@
-# Список доработок IPA Installer
+# IPA Installer: Сценарный анализ и задачи
 
-Полный анализ текущего состояния проекта: критические баги, недоработки, недостающие тесты, улучшения.
+**Текущая готовность: ~80%** — Pipeline функционален (USB -> пейринг -> TLS -> AFC -> установка), 13 unit-тестов, полный UI с Material 3, Room DB история, уведомления, локализация (EN/RU).
 
-**Текущая готовность: ~25-30%** — каркас приложения готов, протоколы нефункциональны.
+**Что работает:** обнаружение устройства, получение USB-разрешения, пейринг с сохранением PairRecord, TLS-сессия, загрузка IPA через AFC (streaming), установка через installation_proxy, отображение прогресса, Reconnect.
 
-## Содержание
-
-- [Критические проблемы](#-критические-проблемы)
-- [Баги](#-баги)
-- [Недостающий функционал](#-недостающий-функционал)
-- [Тесты](#-тесты)
-- [UX-улучшения](#-ux-улучшения)
-- [Оптимизации](#-оптимизации)
-- [Roadmap](#-roadmap)
+**Что не работает:** обработка ошибок и edge cases, таймауты на blocking-операции, отмена mid-operation, валидация ответов протоколов, тестовое покрытие ViewModel и интеграционных сценариев.
 
 ---
 
-## КРИТИЧЕСКИЕ ПРОБЛЕМЫ
+## Легенда приоритетов
 
-Эти проблемы делают приложение полностью нерабочим. Без их решения невозможна установка IPA.
-
-### ~~1. Бинарный протокол usbmuxd (version 0)~~ ИСПРАВЛЕНО
-
-**Файлы:** `protocol/usbmuxd/MuxProtocol.kt`, `usb/UsbMuxConnection.kt`
-
-~~**Проблема:** Код реализует только plist-версию протокола (version 1), которая используется через Unix-сокет на десктопе.~~
-
-**Исправлено:** Добавлена поддержка бинарного протокола v0 в `MuxProtocol` (`VERSION_BINARY`, `serializeBinaryConnect`, `parseBinaryResult`). `UsbMuxConnection` получил флаг `useBinaryProtocol` и метод `sendBinaryConnect()` для fallback на v0 при прямом USB-подключении. Plist v1 остаётся по умолчанию.
-
-### ~~2. Отсутствие TLS/SSL~~ ИСПРАВЛЕНО
-
-**Файлы:** `crypto/TlsTransport.kt`, `protocol/lockdownd/LockdownClient.kt`, `usb/UsbTransport.kt`
-
-~~**Проблема:** После `StartSession` lockdownd требует переключения на TLS. Без TLS **невозможно** вызвать `StartService`.~~
-
-**Исправлено:** Создан `TlsTransport` на базе BouncyCastle `bctls-jdk18on` (`TlsClientProtocol` + `DefaultTlsClient`). TLS 1.2 с mutual authentication: клиент предъявляет host certificate+key из PairRecord, сервер принимает любой (self-signed Apple certs). `UsbTransport` получил `asInputStream()`/`asOutputStream()` для TLS bridge. `LockdownClient.upgradeTls()` выполняет handshake и переключает read/write на шифрованный канал. `DeviceConnectionManager` вызывает TLS upgrade после `startSession()` перед `startService()`.
-
-### ~~3. Заглушки в MainViewModel~~ ИСПРАВЛЕНО
-
-**Файл:** `viewmodel/MainViewModel.kt`
-
-~~**Проблема:** `connectToDevice()` и `installIpa()` — TODO-заглушки. Нет рабочего pipeline.~~
-
-**Исправлено:** `connectToDevice()` создаёт `DeviceConnectionManager` с `ConnectionManagerCallback`, который обновляет StateFlows, отправляет уведомления и записывает историю установок. `installIpa()` читает IPA из Uri через `ContentResolver.openInputStream()` и делегирует в `connectionManager.installIpa()`. Mutex защищает `connectionManager` reference.
-
-### ~~4. Хранение PairRecord~~ ИСПРАВЛЕНО
-
-**Файлы:** `storage/PairRecordStorage.kt`, `di/AppModule.kt`, `connection/DeviceConnectionManager.kt`
-
-~~**Проблема:** PairRecord нигде не сохраняется. При каждом запуске приложения нужен повторный пейринг.~~
-
-**Исправлено:** Создан `PairRecordStorage` — файловое хранилище в `context.filesDir/pair_records/{udid}.json` с JSON+Base64 сериализацией. Методы: `save()`, `load()`, `delete()`, `exists()`. Провайдер добавлен в `AppModule`. `DeviceConnectionManager.phaseDiscoverAndPair()` проверяет `pairRecordStorage.load(udid)` перед пейрингом — при повторном подключении "Trust" dialog не появляется.
+| Приоритет | Описание | Критерий |
+|-----------|----------|----------|
+| **P0 (Блокер)** | App hang, crash, OOM, бесконечный цикл | Прямое влияние на главный поток; приложение становится неработоспособным |
+| **P1 (Критичный)** | Нет восстановления после ошибок, пользователь застревает | Pipeline не завершается, нет обратной связи, требуется kill app |
+| **P2 (Важный)** | Ненадёжность, плохой UX, тихие ошибки | Работает, но неудобно/ненадёжно; пользователь путается |
+| **P3 (Улучшение)** | Новые фичи, оптимизации, расширенные тесты | Не влияет на основной поток; nice-to-have |
 
 ---
 
-## БАГИ
+## Сводная таблица задач (по приоритету)
 
-### ~~B1. UsbTransport.write() не дозаписывает данные~~ ИСПРАВЛЕНО
+### P0 — Блокеры
 
-**Файл:** `usb/UsbTransport.kt`
+| ID | Сценарий | Задача | Файлы |
+|----|----------|--------|-------|
+| T-04 | S2: Пользователь не нажимает «Trust» | Таймаут на pair request (60с) + UI-индикатор ожидания + кнопка отмены | `DeviceConnectionManager.kt`, `MainScreen.kt` |
+| T-09 | S3: TLS handshake зависает | Таймаут на `performHandshake()` (10с) с корректным abort | `TlsTransport.kt`, `DeviceConnectionManager.kt` |
+| T-14 | S5: `installIpa()` вызывает `readBytes()` на большом файле | OOM: заменить на streaming через `ContentResolver.openInputStream()` | `MainViewModel.kt` |
+| T-18 | S6: install proxy `Status=""` -> бесконечный цикл | Обработать пустой/отсутствующий Status, добавить timeout на цикл чтения | `InstallationProxyClient.kt` |
+| T-19 | S6: Устройство перестаёт отвечать mid-install | Таймаут на чтение progress updates (30с без ответа -> error) | `InstallationProxyClient.kt`, `DeviceConnectionManager.kt` |
 
-~~`bulkTransfer` может вернуть меньше байт, чем `data.size`, но код не дозаписывает остаток.~~
+### P1 — Критичные
 
-**Исправлено:** `write()` теперь использует цикл с offset, дозаписывая остаток до полной отправки.
+| ID | Сценарий | Задача | Файлы |
+|----|----------|--------|-------|
+| T-01 | S1: Пользователь отклоняет USB permission | Показать понятное сообщение + кнопку «Запросить снова» | `MainViewModel.kt`, `MainScreen.kt` |
+| T-05 | S2: Пользователь нажимает «Don't Trust» | Обработать `UserDeniedPairing` в ответе lockdownd, показать инструкции | `DeviceConnectionManager.kt`, `LockdownClient.kt` |
+| T-06 | S2: Сохранённый PairRecord отвергнут устройством | Удалить старый record, запросить re-pair автоматически | `DeviceConnectionManager.kt`, `PairRecordStorage.kt` |
+| T-10 | S3: TLS upgrade fail — pipeline продолжает без TLS | Если `upgradeTls()` выбросила исключение — abort pipeline, не продолжать | `DeviceConnectionManager.kt` |
+| T-15 | S5: AFC upload прерван (USB disconnect) | Graceful abort + очистка частично загруженного файла на устройстве | `AfcClient.kt`, `DeviceConnectionManager.kt` |
+| T-16 | S5: AFC EOF раньше totalSize — тихий «успех» | Проверять `bytesWritten == totalSize`, иначе ошибка | `AfcClient.kt` |
+| T-20 | S6: IPA не подписан для этого устройства | Парсить error message от install proxy, показать понятное описание | `DeviceConnectionManager.kt`, `MainViewModel.kt` |
+| T-22 | S7: Очистка /PublicStaging после установки | AFC `removeFile()` после завершения (success или fail) | `DeviceConnectionManager.kt`, `AfcClient.kt` |
+| T-25 | S8: Reconnect не работает (старый UsbTransport закрыт) | Полный reset state при reconnect: новый transport, новая сессия | `MainViewModel.kt`, `DeviceConnectionManager.kt` |
+| T-26 | S8: Пользователь застрял в Pairing state без Cancel | Добавить Cancel кнопку во все blocking states (Pairing, Connecting, Uploading) | `MainScreen.kt`, `MainViewModel.kt` |
+| T-32 | S10: Нет тестов ViewModel | Unit-тесты MainViewModel (state transitions, error handling) | Новый `MainViewModelTest.kt` |
 
-### ~~B2. UsbTransport.readExact() зацикливается при ZLP~~ ИСПРАВЛЕНО
+### P2 — Важные
 
-**Файл:** `usb/UsbTransport.kt`
+| ID | Сценарий | Задача | Файлы |
+|----|----------|--------|-------|
+| T-02 | S1: USB кабель отключён mid-operation | Ловить USB disconnect, abort pipeline, показать ошибку | `UsbTransport.kt`, `DeviceConnectionManager.kt` |
+| T-03 | S1: Устройство — не iPhone (Apple keyboard) | Добавить unit-тест на фильтрацию (уже исправлено в B9) | Новый `AppleDeviceDetectorTest.kt` |
+| T-07 | S2: Устройство с паролем (PasswordProtected) | Показать «Разблокируйте устройство и попробуйте снова» | `DeviceConnectionManager.kt` |
+| T-08 | S2: PairRecordStorage проглатывает ошибки | Логировать ошибки десериализации, не молча возвращать null | `PairRecordStorage.kt` |
+| T-11 | S3: StartService возвращает невалидный порт | Валидация port из ответа StartService перед connect | `DeviceConnectionManager.kt` |
+| T-12 | S4: IPA повреждён / не содержит Info.plist | Показать ошибку вместо crash | `MainViewModel.kt` |
+| T-17 | S5: Отмена загрузки пользователем | CancellationToken для `uploadFile()`, кнопка Cancel в UI | `AfcClient.kt`, `MainScreen.kt`, `MainViewModel.kt` |
+| T-21 | S6: Отмена установки пользователем | Кнопка Cancel + отправка abort в install proxy | `MainScreen.kt`, `MainViewModel.kt` |
+| T-23 | S7: Уведомление отправлено до завершения установки | Проверить, что notification идёт только после финального Complete | `InstallNotificationHelper.kt`, `MainViewModel.kt` |
+| T-24 | S7: POST_NOTIFICATIONS не запрошен runtime (Android 13+) | Запросить permission при первом запуске или перед установкой | `MainActivity.kt` |
+| T-27 | S8: Binary v0 fallback никогда не активируется | Автоматический fallback: если plist v1 Connect fail -> retry с v0 | `UsbMuxConnection.kt`, `DeviceConnectionManager.kt` |
+| T-33 | S10: Нет интеграционных тестов | Integration-тест DeviceConnectionManager с mock transport | Новый `DeviceConnectionManagerTest.kt` |
+| T-34 | S10: Нет тестов PairRecordStorage | Round-trip тест: save -> load -> verify | Новый `PairRecordStorageTest.kt` |
+| T-35 | S10: Нет тестов TlsTransport | Unit-тест с mock handshake | Новый `TlsTransportTest.kt` |
+| T-36 | S10: Accessibility | `contentDescription` для всех иконок и интерактивных элементов | `MainScreen.kt` |
 
-~~Если `bulkTransfer` вернёт 0 (zero-length packet), `offset` не увеличится и цикл станет бесконечным.~~
+### P3 — Улучшения
 
-**Исправлено:** добавлен счётчик ZLP (`MAX_ZLP_RETRIES = 10`) с выбросом `IOException` при превышении.
-
-### ~~B3. Бесконечные циклы в AfcClient.readResponse()~~ ИСПРАВЛЕНО
-
-**Файл:** `protocol/afc/AfcClient.kt`
-
-~~При некорректных значениях от устройства (`entireLength < thisLength`) результат вычитания будет отрицательным.~~
-
-**Исправлено:** добавлена валидация `thisLength >= HEADER_SIZE` и `entireLength >= thisLength` перед вычислением размеров.
-
-### ~~B4. AfcClient.uploadFile() грузит весь файл в RAM~~ ИСПРАВЛЕНО
-
-**Файл:** `protocol/afc/AfcClient.kt`
-
-~~Для IPA размером 2+ ГБ вызовет `OutOfMemoryError`.~~
-
-**Исправлено:** добавлен основной `uploadFile(remotePath, inputStream, totalSize, ...)` со стримингом. Старая `ByteArray`-версия делегирует в новую.
-
-### ~~B5. PairingCrypto — отрицательные серийные номера сертификатов~~ ИСПРАВЛЕНО
-
-**Файл:** `crypto/PairingCrypto.kt`
-
-~~`SecureRandom().nextLong()` может вернуть отрицательное значение. X.509 требует положительного серийного номера.~~
-
-**Исправлено:** заменено на `BigInteger(128, SecureRandom())` в обоих методах генерации сертификатов.
-
-### ~~B6. PairingCrypto — нет X.509 расширений~~ ИСПРАВЛЕНО
-
-**Файл:** `crypto/PairingCrypto.kt`
-
-~~Корневой CA не имеет `basicConstraints: CA=true`. iOS может отклонить такой сертификат.~~
-
-**Исправлено:** добавлены расширения `BasicConstraints(CA=true)` и `KeyUsage(keyCertSign | cRLSign)` в корневой CA.
-
-### ~~B7. InstallationProxyClient — жёсткий PackageType~~ ИСПРАВЛЕНО
-
-**Файл:** `protocol/installproxy/InstallationProxyClient.kt`
-
-~~`PackageType = "Developer"` работает только для dev-signed IPA. Для ad-hoc/enterprise IPA это неверно.~~
-
-**Исправлено:** `packageType` стал параметром метода `install()` с дефолтным значением `"Developer"`.
-
-### ~~B8. Конвертация порта без валидации~~ ИСПРАВЛЕНО
-
-**Файл:** `protocol/usbmuxd/MuxProtocol.kt`
-
-~~Порт не проверяется на диапазон 0..65535.~~
-
-**Исправлено:** добавлен `require(message.port in 0..65535)` перед конвертацией.
-
-### ~~B9. AppleDeviceDetector — слишком широкий фильтр~~ ИСПРАВЛЕНО
-
-**Файлы:** `usb/AppleDeviceDetector.kt`
-
-~~Vendor ID `0x05AC` ловит все устройства Apple: клавиатуры, мыши, AirPods, CarPlay-аксессуары.~~
-
-**Исправлено:** добавлена проверка `hasMuxInterface()` (subclass 0xFE, protocol 2) в `findConnectedDevices()` и `deviceEvents()`.
-
-### ~~B10. MainActivity не обрабатывает USB Intent~~ ИСПРАВЛЕНО
-
-**Файл:** `ui/main/MainActivity.kt`
-
-~~При запуске через `USB_DEVICE_ATTACHED` Intent содержит `UsbDevice`, но код его не извлекает.~~
-
-**Исправлено:** `onCreate` проверяет `ACTION_USB_DEVICE_ATTACHED` и вызывает `viewModel.onUsbDeviceAttached(device)`.
-
-### ~~B11. MainViewModel — гонки данных~~ ИСПРАВЛЕНО
-
-**Файл:** `viewmodel/MainViewModel.kt`
-
-~~`currentDevice` и `muxConnection` — обычные `var`, не `@Volatile` и без мутекса.~~
-
-**Исправлено:** все обращения к `currentDevice` и `muxConnection` защищены `Mutex.withLock`.
-
-### ~~B12. MainScreen — неверное имя файла из Uri~~ ИСПРАВЛЕНО
-
-**Файл:** `ui/main/MainScreen.kt`
-
-~~`selectedIpa?.lastPathSegment` для DocumentProvider возвращает cryptic ID вместо имени файла.~~
-
-**Исправлено:** используется `ContentResolver.query()` с `OpenableColumns.DISPLAY_NAME` через `remember(selectedIpa)`.
-
-### ~~B13. MainScreen — захардкоженные строки~~ ИСПРАВЛЕНО
-
-**Файл:** `ui/main/MainScreen.kt`
-
-~~Строки `"USB connected, requesting permission…"`, `"OK"`, `"Dismiss"` не в `strings.xml`.~~
-
-**Исправлено:** все строки вынесены в `strings.xml` и используют `stringResource()`.
-
-### ~~B14. UsbTransport — нет setConfiguration()~~ ИСПРАВЛЕНО
-
-**Файл:** `usb/UsbTransport.kt`
-
-~~Не вызывается `setConfiguration()` перед `claimInterface()`.~~
-
-**Исправлено:** `open()` перебирает все USB-конфигурации через `findMuxInConfigurations()`, отправляет `SET_CONFIGURATION` control transfer, затем `claimInterface()`. Fallback на default interfaces сохранён.
-
-### ~~B15. LockdownClient — нет проверки ошибок в ответах~~ ИСПРАВЛЕНО
-
-**Файл:** `protocol/lockdownd/LockdownClient.kt`
-
-~~`getValue()` и `queryType()` не проверяют ключ `Error` в ответе lockdownd. Только `startService()` его проверяет.~~
-
-**Исправлено:** проверка `Error` перенесена в общий метод `request()`, дублирование в `startService()` убрано.
+| ID | Сценарий | Задача | Файлы |
+|----|----------|--------|-------|
+| T-13 | S4: Показать signing info | Отобразить тип подписи (dev/adhoc/enterprise) в IpaInfoCard | `IpaInfo.kt`, `MainScreen.kt` |
+| T-28 | S9: iOS 17+ устройство | Поддержка RemoteXPC протокола | Новые файлы |
+| T-29 | S9: Несколько устройств | UI выбора устройства, список подключённых | `MainScreen.kt`, `MainViewModel.kt` |
+| T-30 | S9: Список/удаление приложений | Browse + Uninstall через installation_proxy | `InstallationProxyClient.kt`, новый UI |
+| T-31 | S9: Экспорт логов | Кнопка Share logs -> файл/Intent | `MainViewModel.kt`, `MainScreen.kt` |
+| T-37 | S10: Compose UI тесты | Snapshot-тесты для разных состояний экрана | Новые instrumented-тесты |
+| T-38 | S10: Оптимизации O1-O4 | Буферы, batching GetValue, настраиваемые таймауты, ProGuard | Различные файлы |
 
 ---
 
-## НЕДОСТАЮЩИЙ ФУНКЦИОНАЛ
+## Сценарные группы
 
-### F1. Бинарный usbmuxd для прямого USB
-- [ ] Заголовок v0 (бинарный формат)
-- [ ] TCP-мультиплексирование (открытие нескольких виртуальных соединений)
-- [ ] Обработка асинхронных уведомлений (DeviceAttached/Detached)
+### S1: USB-подключение
 
-### F2. TLS-обёртка для lockdownd
-- [ ] `SSLEngine`-обёртка поверх `UsbTransport`
-- [ ] Кастомный `TrustManager` для самоподписанных сертификатов
-- [ ] Переключение lockdownd-сессии на TLS
+Обнаружение Apple-устройства через Android USB Host API, получение разрешения, открытие mux-интерфейса.
 
-### F3. Полный пейринг
-- [ ] Извлечение `DevicePublicKey` из lockdownd
-- [ ] Генерация Device Certificate из публичного ключа
-- [ ] Обработка `UserDeniedPairing`
-- [ ] Обработка `PasswordProtected` устройств
-- [ ] Извлечение `EscrowBag` из ответа Pair
-- [ ] Сохранение PairRecord на диск
+**Positive flow:**
+1. Android обнаруживает USB-устройство с VID `0x05AC`
+2. Фильтрация: `hasMuxInterface()` (subclass 0xFE, protocol 2) отсеивает клавиатуры/мыши
+3. Пользователь даёт USB permission
+4. `UsbTransport.open()` — `SET_CONFIGURATION` + `claimInterface()` на mux-интерфейсе
 
-### F4. Стриминговая загрузка файлов через AFC
-- [ ] `uploadFile(inputStream, totalSize)` вместо `uploadFile(ByteArray)`
-- [ ] Отмена загрузки (CancellationToken)
-- [ ] Настраиваемый размер чанка
+**Negative flows:**
 
-### F5. Отмена операций
-- [ ] Отмена загрузки IPA
-- [ ] Отмена установки
-- [ ] Корректная очистка ресурсов при отмене
-
-### F6. Повторное подключение
-- [ ] Автоматическая повторная попытка при ошибке USB
-- [ ] Восстановление сессии без повторного пейринга
-- [ ] USB reset при неотвечающем устройстве
-
-### F7. Информация об устройстве
-- [ ] Серийный номер, модель, доступное место
-- [ ] Список установленных приложений (Browse)
-- [ ] Удаление приложений (Uninstall)
-
-### F8. Логирование
-- [ ] Логирование USB-пакетов для отладки
-- [ ] Логирование plist-сообщений
-- [ ] Экспорт логов для диагностики
-
-### F9. Поддержка iOS 17+
-- [ ] Новый протокол lockdownd (RemoteXPC)
-- [ ] Персонализированные DeveloperDiskImage (если понадобятся)
-- [ ] Проверка совместимости с iOS 18
-
-### F10. Множественные устройства
-- [ ] Выбор устройства из списка, если подключено несколько
-- [ ] Параллельная установка на несколько устройств
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-01 | Пользователь отклоняет permission | Тихая ошибка, UI не обновляется | Сообщение + кнопка «Запросить снова» |
+| T-02 | Кабель отключён mid-operation | Crash/hang на следующем `bulkTransfer` | Graceful abort pipeline + ошибка в UI |
+| T-03 | Устройство не iPhone (уже исправлено B9) | — | Unit-тест для подтверждения |
 
 ---
 
-## ТЕСТЫ
+### S2: Пейринг
 
-Тестов **нет вообще**. Каталоги `test/` и `androidTest/` пустые.
+Первичный пейринг с генерацией сертификатов, повторное подключение с сохранённым PairRecord.
 
-### Unit-тесты (обязательные)
+**Positive flow:**
+1. Проверяем `PairRecordStorage.load(udid)` — если есть, пропускаем пейринг
+2. Если нет — `lockdownd.pair(pairRecord)` -> iOS показывает «Trust This Computer?»
+3. Пользователь нажимает «Trust» -> lockdownd возвращает Success
+4. `PairRecordStorage.save(udid, pairRecord)`
 
-| Приоритет | Тест | Описание |
-|-----------|------|----------|
-| P0 | `MuxProtocolTest` | Сериализация/десериализация заголовков usbmuxd |
-| P0 | `MuxProtocolPortTest` | Конвертация порта в big-endian (0, 1, 255, 256, 62078, 65535) |
-| P0 | `MuxProtocolPayloadTest` | Сериализация plist-сообщений (Connect, Listen, ListDevices) |
-| P0 | `MuxProtocolParseTest` | Парсинг ответов (Result, Attached, Detached) |
-| P1 | `PairingCryptoTest` | Генерация сертификатов, валидность, подпись |
-| P1 | `PairingCryptoCertChainTest` | Root CA подписывает Host cert |
-| P1 | `PairingCryptoSerialTest` | Серийные номера положительные |
-| P1 | `AfcPacketTest` | Формат AFC-заголовков (magic, длины, операции) |
-| P1 | `AfcClientTest` | Последовательность операций (open → write → close) |
-| P2 | `LockdownClientTest` | Формат запросов/ответов lockdownd |
-| P2 | `InstallProxyClientTest` | Парсинг progress-обновлений |
-| P2 | `PlistUtilTest` | Парсинг XML и бинарных plist |
-| P2 | `PairRecordTest` | Сериализация/десериализация PairRecord |
+**Negative flows:**
 
-### Instrumented-тесты (Android)
-
-| Приоритет | Тест | Описание |
-|-----------|------|----------|
-| P1 | `AppleDeviceDetectorTest` | Обнаружение USB-устройств (mock UsbManager) |
-| P1 | `UsbTransportTest` | Открытие/закрытие mux-интерфейса |
-| P2 | `MainViewModelTest` | State transitions, обработка событий |
-| P3 | `MainScreenTest` | Compose snapshot-тесты для разных состояний |
-
-### Mocking-стратегия
-
-Для тестирования протоколов без реального устройства:
-
-```kotlin
-// Создать FakeTransport, имитирующий ответы iPhone
-class FakeTransport : UsbTransport {
-    private val responseQueue: Queue<ByteArray> = LinkedList()
-    fun enqueueResponse(data: ByteArray) { responseQueue.add(data) }
-    override suspend fun read(maxLength: Int) = responseQueue.poll()
-    override suspend fun write(data: ByteArray) = data.size
-}
-```
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-04 | Пользователь не нажимает «Trust» | **P0:** Бесконечное ожидание, app hang | Таймаут 60с + UI «Нажмите Trust на устройстве» + Cancel |
+| T-05 | Пользователь нажимает «Don't Trust» | Исключение без объяснения | «Нажмите «Доверять» на iOS-устройстве» + Retry |
+| T-06 | Старый PairRecord отвергнут | Ошибка, pipeline стоит | Удалить record, автоматический re-pair |
+| T-07 | Устройство с паролем | Непонятная ошибка | «Разблокируйте устройство и попробуйте снова» |
+| T-08 | Ошибка десериализации PairRecord | Молча `null`, повторный пейринг | Логировать причину, затем re-pair |
 
 ---
 
-## UX-УЛУЧШЕНИЯ
+### S3: TLS-сессия
 
-### ~~U1. MIME-фильтр для IPA~~ РЕАЛИЗОВАНО
+StartSession с lockdownd, TLS handshake, переключение на шифрованный канал, StartService.
 
-~~Текущий `application/octet-stream` показывает все файлы. Использовать `"*/*"` с проверкой расширения `.ipa` после выбора.~~
+**Positive flow:**
+1. `lockdownd.startSession(hostId, pairRecord.hostId)` -> SessionID + EnableSessionSSL
+2. `lockdownd.upgradeTls(pairRecord)` -> BouncyCastle TLS 1.2 mutual auth
+3. `lockdownd.startService("com.apple.afc")` -> порт для AFC
+4. `lockdownd.startService("com.apple.mobile.installation_proxy")` -> порт для install proxy
 
-**Реализовано:** Файловый пикер использует `*/*`, после выбора валидируется расширение `.ipa`. При неверном расширении показывается Snackbar.
+**Negative flows:**
 
-### ~~U2. Отображение имени файла~~ ИСПРАВЛЕНО (B12)
-
-~~Использовать `ContentResolver.query()` + `OpenableColumns.DISPLAY_NAME` вместо `Uri.lastPathSegment`.~~
-
-### ~~U3. Прокрутка экрана~~ РЕАЛИЗОВАНО
-
-~~Обернуть содержимое `MainScreen` в `LazyColumn` или `verticalScroll` для маленьких экранов.~~
-
-**Реализовано:** `MainScreen` использует `LazyColumn` для прокрутки контента и истории установок.
-
-### ~~U4. Кнопка переподключения~~ РЕАЛИЗОВАНО
-
-~~Добавить кнопку «Переподключить» в карточке устройства при ошибке.~~
-
-**Реализовано:** Кнопка «Reconnect» с иконкой Refresh в `DeviceStatusCard` при `ConnectionState.Error`. ViewModel метод `reconnect()`.
-
-### ~~U5. Информация об IPA~~ РЕАЛИЗОВАНО
-
-~~После выбора файла показать: имя, размер, bundle ID (парсить Info.plist из ZIP).~~
-
-**Реализовано:** `IpaInfo` модель с `displayName`, `sizeBytes`, `bundleId`, `bundleVersion`. Парсинг Info.plist из ZIP через `dd-plist`. Карточка `IpaInfoCard` отображает данные.
-
-### ~~U6. Compose Preview~~ РЕАЛИЗОВАНО
-
-~~Добавить `@Preview` функции для всех Composable-компонентов для удобства разработки.~~
-
-**Реализовано:** 6 `@Preview` функций: Disconnected, Paired+IPA, Error, Uploading, Install Success, Install Failed.
-
-### ~~U7. Локализация~~ РЕАЛИЗОВАНО
-
-- [x] Добавить `values-ru/strings.xml`
-- [x] Перенести захардкоженные строки в ресурсы
-
-**Реализовано:** Полная русская локализация всех строк включая новые (U1, U4, U5, U9, U10).
-
-### ~~U8. Тема~~ РЕАЛИЗОВАНО
-
-~~Заменить `android:Theme.Material.Light.NoActionBar` на `Theme.Material3.Light.NoActionBar` в `themes.xml`.~~
-
-**Реализовано:** XML-тема обновлена на Material3. Добавлена зависимость `com.google.android.material`.
-
-### ~~U9. Уведомления~~ РЕАЛИЗОВАНО
-
-~~Показывать уведомление при завершении установки (если приложение в фоне).~~
-
-**Реализовано:** `InstallNotificationHelper` с каналом `install_status`, `POST_NOTIFICATIONS` permission в манифесте. Уведомления при Success/Failed.
-
-### ~~U10. История установок~~ РЕАЛИЗОВАНО
-
-~~Хранить историю успешных/неудачных установок (Room DB).~~
-
-**Реализовано:** Room DB с `InstallRecord` entity, `InstallHistoryDao`, `AppDatabase`. Секция истории в `MainScreen` с иконками Success/Failed. Автоочистка старых записей.
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-09 | TLS handshake зависает | **P0:** App hang | Таймаут 10с + abort |
+| T-10 | `upgradeTls()` выбрасывает исключение | Pipeline может продолжить без TLS | Abort pipeline, показать ошибку |
+| T-11 | StartService возвращает невалидный порт | Попытка connect на port 0 | Валидация перед connect |
 
 ---
 
-## ОПТИМИЗАЦИИ
+### S4: Выбор IPA
 
-### O1. Пул буферов для USB-чтения
+Файловый пикер через SAF, валидация расширения, парсинг Info.plist из ZIP.
 
-`UsbTransport.read()` выделяет новый `ByteArray(65536)` при каждом вызове. Использовать `ByteArrayPool`.
+**Positive flow:**
+1. Пользователь выбирает файл через SAF (`*/*` фильтр)
+2. Проверка расширения `.ipa`
+3. Парсинг `Info.plist` из ZIP -> `IpaInfo` (bundleId, version, displayName, size)
+4. Отображение в `IpaInfoCard`
 
-### O2. Батчинг GetValue в lockdownd
+**Negative flows:**
 
-`getDeviceInfo()` делает 5 последовательных запросов. Можно получить все значения одним запросом `GetValue` без ключа.
-
-### O3. Настраиваемый таймаут USB
-
-`TIMEOUT_MS = 5000` слишком мал для больших файлов через USB 2.0. Сделать таймаут настраиваемым.
-
-### O4. ProGuard-оптимизация
-
-Правило `-keep class org.bouncycastle.** { *; }` сохраняет **все** классы BouncyCastle. Сузить до используемых пакетов.
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-12 | IPA повреждён / нет Info.plist | Crash при парсинге | Ошибка «Файл повреждён или не является IPA» |
+| T-13 | Показать signing info (P3) | Не реализовано | Тип подписи (dev/adhoc/enterprise) в UI |
 
 ---
 
-## ROADMAP
+### S5: Загрузка через AFC
 
-### Фаза 1: Минимально рабочий прототип
+Стриминг IPA-файла на устройство через Apple File Conduit в `/PublicStaging/`.
 
-Цель: установка dev-signed IPA на iOS-устройство через USB.
+**Positive flow:**
+1. AFC connect на полученный порт
+2. `afcClient.makeDirectory("/PublicStaging")`
+3. `afcClient.uploadFile("/PublicStaging/app.ipa", inputStream, totalSize)` — чанками
+4. Progress callback обновляет UI
 
-| # | Задача | Зависимости | Сложность |
-|---|--------|-------------|-----------|
-| 1.1 | Реализовать бинарный протокол usbmuxd v0 | — | Высокая |
-| 1.2 | Реализовать TCP-мультиплексирование | 1.1 | Высокая |
-| 1.3 | Реализовать TLS через BouncyCastle SSLEngine | — | Высокая |
-| 1.4 | Реализовать полный пейринг (извлечение DevicePublicKey, генерация сертификатов) | 1.2 | Средняя |
-| 1.5 | Реализовать StartSession + TLS-переключение | 1.3, 1.4 | Средняя |
-| 1.6 | Связать pipeline: connect → pair → session → AFC → install | 1.1–1.5 | Средняя |
-| 1.7 | Стриминговая загрузка IPA через AFC | 1.6 | Средняя |
-| 1.8 | Хранение PairRecord | — | Низкая |
-| 1.9 | Исправить все баги B1–B15 | — | Средняя |
+**Negative flows:**
 
-### Фаза 2: Стабилизация
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-14 | `readBytes()` на большом файле | **P0:** OOM | Streaming через `ContentResolver.openInputStream()` |
+| T-15 | USB disconnect mid-upload | Hang/crash | Graceful abort + очистка на устройстве |
+| T-16 | EOF раньше totalSize | Тихий «успех» | `bytesWritten == totalSize` check |
+| T-17 | Пользователь хочет отменить | Нет кнопки Cancel | CancellationToken + Cancel UI |
 
-| # | Задача | Сложность |
-|---|--------|-----------|
-| 2.1 | Unit-тесты для протоколов (P0, P1) | Средняя |
-| 2.2 | Обработка ошибок и retry-логика | Средняя |
-| 2.3 | Отмена операций (upload, install) | Средняя |
-| 2.4 | Логирование для отладки | Низкая |
-| ~~2.5~~ | ~~UX-исправления (U1–U10)~~ | ~~Низкая~~ ✅ |
+---
+
+### S6: Установка IPA
+
+Команда Install через installation_proxy, отслеживание прогресса, обработка ошибок подписи.
+
+**Positive flow:**
+1. Connect к installation_proxy на полученном порту
+2. `installProxy.install("/PublicStaging/app.ipa")` с `PackageType`
+3. Чтение progress updates: `PercentComplete`, `Status`
+4. Финальный `Status: "Complete"` -> успех
+
+**Negative flows:**
+
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-18 | `Status=""` в ответе | **P0:** Бесконечный цикл | Обработка + timeout |
+| T-19 | Устройство не отвечает | **P0:** Hang | Таймаут 30с без ответа -> error |
+| T-20 | IPA не подписан для устройства | Непонятная ошибка | ErrorMapper -> человеко-читаемое сообщение |
+| T-21 | Пользователь хочет отменить | Нет кнопки Cancel | Cancel + abort в proxy |
+
+---
+
+### S7: Пост-установка
+
+Очистка временных файлов, уведомления, запись в историю.
+
+**Positive flow:**
+1. Удаление IPA из `/PublicStaging/` через AFC
+2. Notification «Установка завершена» (если app в фоне)
+3. Запись `InstallRecord` в Room DB
+4. Обновление UI -> Success state
+
+**Negative flows:**
+
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-22 | Нет очистки /PublicStaging | Файл остаётся на устройстве | AFC `removeFile()` в finally-блоке |
+| T-23 | Notification до завершения | Возможна гонка | Notification только после финального Complete |
+| T-24 | POST_NOTIFICATIONS не запрошен (API 33+) | Нет runtime permission request | Запрос при запуске или перед установкой |
+
+---
+
+### S8: Переподключение и отмена
+
+Reconnect после ошибок, отмена blocking-операций пользователем.
+
+**Positive flow:**
+1. Ошибка в pipeline -> кнопка «Reconnect»
+2. `MainViewModel.reconnect()` -> создаёт новый `DeviceConnectionManager`
+3. Новый pipeline с использованием сохранённого PairRecord
+
+**Negative flows:**
+
+| ID | Сценарий | Текущее поведение | Ожидаемое поведение |
+|----|----------|-------------------|---------------------|
+| T-25 | Reconnect со старым transport | Возможен crash | Полный reset: новый transport + сессия |
+| T-26 | Нет Cancel в blocking states | Пользователь застревает | Cancel для Pairing, Connecting, Uploading |
+| T-27 | Binary v0 fallback не работает | Только plist v1 | Автоматический retry с v0 при fail |
+
+---
+
+### S9: Edge Cases
+
+| ID | Сценарий | Задача | Приоритет |
+|----|----------|--------|-----------|
+| T-28 | iOS 17+ устройство | Поддержка RemoteXPC протокола | P3 |
+| T-29 | Несколько устройств одновременно | UI выбора устройства из списка | P3 |
+| T-30 | Управление приложениями | Browse + Uninstall через installation_proxy | P3 |
+| T-31 | Экспорт логов для диагностики | Кнопка Share logs -> файл/Intent | P3 |
+
+---
+
+### S10: Качество кода
+
+| ID | Задача | Приоритет | Файлы |
+|----|--------|-----------|-------|
+| T-32 | ViewModel unit-тесты (state transitions, error handling) | P1 | Новый `MainViewModelTest.kt` |
+| T-33 | Integration-тест DeviceConnectionManager с mock transport | P2 | Новый `DeviceConnectionManagerTest.kt` |
+| T-34 | PairRecordStorage round-trip тест (save -> load -> verify) | P2 | Новый `PairRecordStorageTest.kt` |
+| T-35 | TlsTransport unit-тест (mock handshake) | P2 | Новый `TlsTransportTest.kt` |
+| T-36 | Accessibility: `contentDescription` для всех иконок | P2 | `MainScreen.kt` |
+| T-37 | Compose UI snapshot-тесты | P3 | Новые instrumented-тесты |
+| T-38 | Оптимизации: буферы (O1), batching GetValue (O2), таймауты USB (O3), ProGuard (O4) | P3 | Различные файлы |
+
+---
+
+## ErrorMapper: Маппинг ошибок (T-20)
+
+Создать `ErrorMapper.kt` — маппинг протокольных ошибок в user-facing сообщения:
+
+| Протокольная ошибка | Сообщение (RU) | Сообщение (EN) |
+|---------------------|----------------|----------------|
+| `UserDeniedPairing` | Нажмите «Доверять» на iOS-устройстве | Tap "Trust" on the iOS device |
+| `PasswordProtected` | Разблокируйте устройство и попробуйте снова | Unlock the device and try again |
+| `InvalidHostID` | Пейринг устарел. Переподключите устройство | Pairing expired. Reconnect the device |
+| AFC error codes | Ошибка передачи файла: {описание} | File transfer error: {description} |
+| Install proxy errors | Установка не удалась: {описание} | Installation failed: {description} |
+| TLS handshake timeout | Ошибка шифрования. Переподключите устройство | Encryption error. Reconnect the device |
+| USB disconnect | Устройство отключено | Device disconnected |
+
+---
+
+## Roadmap
+
+### Фаза 1: Минимально рабочий прототип — ЗАВЕРШЕНА
+
+Все 9 подзадач выполнены: бинарный протокол v0, TLS, пейринг, хранение PairRecord, pipeline, стриминг AFC, исправление багов B1-B15.
+
+### Фаза 2: Стабилизация (текущая)
+
+| # | Задача | Задачи TODO | Сложность | Статус |
+|---|--------|-------------|-----------|--------|
+| 2.1 | Unit-тесты протоколов | — | Средняя | Done (13 тестов) |
+| 2.2 | Таймауты на blocking-операции | T-04, T-09, T-18, T-19 | Средняя | TODO |
+| 2.3 | Обработка ошибок протоколов | T-05, T-06, T-07, T-10, T-11, T-16, T-20 | Средняя | TODO |
+| 2.4 | Отмена операций mid-progress | T-17, T-21, T-26 | Средняя | TODO |
+| 2.5 | OOM fix (streaming IPA) | T-14 | Низкая | TODO |
+| 2.6 | Очистка /PublicStaging | T-22 | Низкая | TODO |
+| 2.7 | ErrorMapper | T-20 | Низкая | TODO |
+| 2.8 | USB disconnect handling | T-02, T-15 | Средняя | TODO |
+| 2.9 | UX: permission denied, reconnect, cancel | T-01, T-25, T-24 | Средняя | TODO |
+| 2.10 | ViewModel + integration тесты | T-32, T-33, T-34, T-35 | Средняя | TODO |
+| 2.11 | Логирование и UX-исправления | — | Низкая | Done |
 
 ### Фаза 3: Расширенный функционал
 
-| # | Задача | Сложность |
-|---|--------|-----------|
-| 3.1 | Поддержка iOS 17+ (RemoteXPC) | Высокая |
-| 3.2 | Список установленных приложений | Средняя |
-| 3.3 | Удаление приложений | Низкая |
-| 3.4 | Множественные устройства | Средняя |
-| 3.5 | Информация об IPA (парсинг Info.plist) | Низкая |
-| 3.6 | История установок | Низкая |
-| 3.7 | Уведомления | Низкая |
-| 3.8 | Instrumented-тесты | Средняя |
+| # | Задача | Задачи TODO | Сложность |
+|---|--------|-------------|-----------|
+| 3.1 | Поддержка iOS 17+ (RemoteXPC) | T-28 | Высокая |
+| 3.2 | Множественные устройства | T-29 | Средняя |
+| 3.3 | Список/удаление приложений | T-30 | Средняя |
+| 3.4 | Signing info в UI | T-13 | Низкая |
+| 3.5 | Экспорт логов | T-31 | Низкая |
+| 3.6 | Compose UI тесты | T-37 | Средняя |
+| 3.7 | Оптимизации (O1-O4) | T-38 | Низкая |
 
-### Оценка общей трудоёмкости
+### Оценка прогресса
 
-| Фаза | Ориентировочный объём |
-|-------|----------------------|
-| Фаза 1 | Основная работа — бинарный usbmuxd + TLS |
-| Фаза 2 | Тесты и стабилизация |
-| Фаза 3 | Расширения по мере необходимости |
+| Фаза | Статус |
+|-------|--------|
+| Фаза 1 | Done — pipeline функционален |
+| Фаза 2 | ~40% — тесты протоколов и UX готовы; нужны: таймауты, обработка ошибок, отмена, streaming fix, тесты ViewModel |
+| Фаза 3 | ~30% — IPA info, история, уведомления готовы; нужны: iOS 17+, множественные устройства, управление приложениями |
+
+---
+
+<details>
+<summary><strong>Исправленные проблемы (Фаза 1)</strong></summary>
+
+### Критические проблемы (все исправлены)
+
+1. **Бинарный протокол usbmuxd v0** — `MuxProtocol` поддерживает v0 (`serializeBinaryConnect`, `parseBinaryResult`), `UsbMuxConnection` имеет флаг `useBinaryProtocol`
+2. **TLS/SSL** — `TlsTransport` на BouncyCastle `bctls-jdk18on`, TLS 1.2 mutual auth, `LockdownClient.upgradeTls()`
+3. **Заглушки MainViewModel** — полный pipeline через `DeviceConnectionManager` с `ConnectionManagerCallback`
+4. **Хранение PairRecord** — `PairRecordStorage` в `filesDir/pair_records/{udid}.json` (JSON+Base64)
+
+### Баги B1-B15 (все исправлены)
+
+- **B1:** `UsbTransport.write()` — цикл с offset для дозаписи
+- **B2:** `readExact()` — ZLP counter (MAX_ZLP_RETRIES=10)
+- **B3:** `AfcClient.readResponse()` — валидация `thisLength >= HEADER_SIZE`
+- **B4:** `AfcClient.uploadFile()` — streaming вместо `ByteArray`
+- **B5:** `PairingCrypto` — `BigInteger(128, SecureRandom())` для серийных номеров
+- **B6:** `PairingCrypto` — `BasicConstraints(CA=true)` + `KeyUsage` в корневом CA
+- **B7:** `InstallationProxyClient` — `packageType` как параметр метода
+- **B8:** `MuxProtocol` — `require(port in 0..65535)`
+- **B9:** `AppleDeviceDetector` — `hasMuxInterface()` фильтрация
+- **B10:** `MainActivity` — обработка `USB_DEVICE_ATTACHED` Intent
+- **B11:** `MainViewModel` — `Mutex` для `currentDevice` и `muxConnection`
+- **B12:** `MainScreen` — `ContentResolver.query()` для имени файла
+- **B13:** `MainScreen` — все строки в `strings.xml`
+- **B14:** `UsbTransport` — `SET_CONFIGURATION` + `claimInterface()`
+- **B15:** `LockdownClient` — проверка `Error` в общем методе `request()`
+
+### UX-улучшения U1-U10 (все реализованы)
+
+- MIME-фильтр IPA, отображение имени файла, прокрутка экрана, кнопка Reconnect
+- IPA info (bundleId, version, size), Compose Previews (6 шт)
+- Локализация EN/RU, Material 3 тема, уведомления, история установок (Room DB)
+
+### Функционал F1-F8 (частично реализован)
+
+- **F1:** Бинарный usbmuxd v0 — готов, нет TCP-мультиплексирования
+- **F2:** TLS — полностью готов
+- **F3:** Пейринг — готов, нет обработки UserDeniedPairing/PasswordProtected
+- **F4:** AFC стриминг — готов, нет отмены загрузки
+- **F5:** Отмена — частично (connectJob), нет cancel mid-transfer/install
+- **F6:** Reconnect — частично, нет auto-retry
+- **F7:** Информация — частично, нет доступного места и списка приложений
+- **F8:** Логирование — частично, нет экспорта и raw USB dump
+
+</details>
+
+---
+
+## Существующие тесты (13 шт)
+
+| Тест | Описание | Приоритет |
+|------|----------|-----------|
+| `MuxProtocolTest` | Сериализация/десериализация заголовков usbmuxd | P0 |
+| `MuxProtocolPortTest` | Конвертация порта в big-endian | P0 |
+| `MuxProtocolPayloadTest` | Сериализация plist-сообщений | P0 |
+| `MuxProtocolParseTest` | Парсинг ответов (Result, Attached, Detached) | P0 |
+| `PairingCryptoTest` | Генерация сертификатов, валидность | P1 |
+| `PairingCryptoCertChainTest` | Root CA подписывает Host cert | P1 |
+| `PairingCryptoSerialTest` | Серийные номера положительные | P1 |
+| `AfcPacketTest` | Формат AFC-заголовков | P1 |
+| `AfcClientTest` | Последовательность операций open -> write -> close | P1 |
+| `LockdownClientTest` | Формат запросов/ответов lockdownd | P2 |
+| `InstallProxyClientTest` | Парсинг progress-обновлений | P2 |
+| `PlistUtilTest` | Парсинг XML и бинарных plist | P2 |
+| `PairRecordTest` | Сериализация/десериализация PairRecord | P2 |
